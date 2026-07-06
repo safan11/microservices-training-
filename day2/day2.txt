@@ -1,0 +1,46 @@
+Monolythic:-
+-------------- 
+  mono means single (one). 
+
+  All the application features is developed as single service/application.
+   eg:-
+   ---- 
+     food delivery 
+     -------------- 
+     login 
+     cart 
+     payment  
+     items 
+     whistlist 
+
+     (9000) ---------> all the request will be handled by one single port. 
+                        login request. 
+                        cart request.
+                        (here no load balancing)
+
+   Single point of failure
+
+
+
+
+why we need micorservices..?
+-------------------------------- 
+ Developing each service as a seperate application, for managing load and scaling.
+                            backend        database
+   login --> 9001           java           oracle
+   cart  --> 9002           .net           mysql
+   payment --> 9003 
+   whistlist --> 9004  
+       (Each application is independence, of language and database.). 
+
+
+  Adv:-
+  ---- 
+    if one is service down, the customer can able to access other services.    
+
+================================================================================
+
+Micorservices COMMUNICATION:-
+----------------------------- 
+   1. SYNCHRONOUS   (day 2)  --> feign client/ rest template
+   2. ASYNCHRONOUS  (day 3)
