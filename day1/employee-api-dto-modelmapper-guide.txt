@@ -1,0 +1,838 @@
+=====================================================================
+ EMPLOYEE REST API - PROFESSIONAL VERSION
+ DTOs + ModelMapper + Validation + Exception Handling + Postman
+=====================================================================
+ Entity fields used (exactly these):
+    id, name, dept, age, createdDate, updatedTime, isDeleted
+ Concepts covered:
+    1. Spring Boot project structure (layers)
+    2. Controller, Service, Repository
+    3. DTOs - what, why, how
+    4. ModelMapper - conversion + points to remember
+    5. Basic validation (@Valid, @NotBlank, @Min...)
+    6. Exception handling (clean JSON errors)
+    7. API testing using Postman (step by step)
+=====================================================================
+
+---------------------------------------------------------------------
+ CONTENTS
+---------------------------------------------------------------------
+ PART 1 : THEORY (read first - simple words)
+ PART 2 : PROJECT STRUCTURE
+ PART 3 : CODE (every file, explained)
+ PART 4 : POSTMAN TESTING (every endpoint + error cases)
+ PART 5 : POINTS TO REMEMBER (ModelMapper + everything)
+---------------------------------------------------------------------
+
+
+=====================================================================
+ PART 1 : THEORY
+=====================================================================
+
+---------------------------------------------------------------------
+ 1.1  THE LAYERS (WHO DOES WHAT)
+---------------------------------------------------------------------
+   Client (Postman)
+      |   JSON over HTTP
+      v
+   CONTROLLER   - the RECEPTIONIST: receives requests, returns
+                  responses. NO business logic here.
+      v
+   SERVICE      - the BRAIN: business rules, conversions,
+                  soft-delete logic. All thinking happens here.
+      v
+   REPOSITORY   - the FILING CLERK: only talks to the database.
+                  Spring Data JPA writes the queries for us.
+      v
+   DATABASE     - H2 (in-memory - perfect for learning/demos)
+
+ RULE: "Controller thin, Service smart, Repository dumb."
+ Each layer only talks to the layer directly below it.
+
+---------------------------------------------------------------------
+ 1.2  WHAT IS A DTO AND WHY DO WE NEED IT?
+---------------------------------------------------------------------
+ DTO = Data Transfer Object = a simple class that carries data
+ between the CLIENT and your API.
+
+ THE PROBLEM WITH USING THE ENTITY DIRECTLY:
+   Our Employee ENTITY has: id, name, dept, age, createdDate,
+   updatedTime, isDeleted.
+
+   * Should the client SEND createdDate? NO - the server sets it.
+   * Should the client SEND isDeleted?  NO - imagine a client
+     sending "isDeleted": true in a create request!
+   * Should the client SEE isDeleted?   Usually NO - internal flag.
+
+   Exposing the entity = exposing your DATABASE DESIGN to the
+   world. Any table change breaks your API contract. Clients can
+   send fields they should never touch. BAD.
+
+ THE SOLUTION - TWO DTOs:
+   EmployeeRequestDTO   (client -> server): ONLY what the client
+                        may send:            name, dept, age
+   EmployeeResponseDTO  (server -> client): ONLY what the client
+                        may see: id, name, dept, age, createdDate,
+                        updatedTime   (isDeleted stays hidden!)
+
+ ANALOGY: the entity is your KITCHEN, DTOs are the MENU and the
+ SERVED PLATE. Customers order from the menu and receive a plate -
+ they never walk into the kitchen.
+
+ THE FLOW:
+   RequestDTO --> (convert) --> ENTITY --> save to DB
+   ENTITY     --> (convert) --> ResponseDTO --> JSON to client
+
+---------------------------------------------------------------------
+ 1.3  WHAT IS MODELMAPPER?
+---------------------------------------------------------------------
+ The conversions above mean copying fields:
+    employee.setName(dto.getName());
+    employee.setDept(dto.getDept());
+    employee.setAge(dto.getAge());     ... boring, repetitive!
+
+ MODELMAPPER does this copying automatically:
+    Employee employee = modelMapper.map(requestDTO, Employee.class);
+    EmployeeResponseDTO resp = modelMapper.map(employee,
+                                        EmployeeResponseDTO.class);
+
+ HOW? It matches fields BY NAME using reflection:
+ "dto.name -> entity.name, dto.age -> entity.age..." One line
+ replaces N setter calls.
+
+---------------------------------------------------------------------
+ 1.4  WHAT IS VALIDATION?
+---------------------------------------------------------------------
+ Never trust client input! Without validation, a client can send:
+    { "name": "", "dept": "", "age": -5 }   ...into your database.
+
+ Bean Validation = annotations ON THE REQUEST DTO:
+    @NotBlank  -> must not be null or empty text
+    @Size      -> text length limits
+    @Min/@Max  -> number range limits
+ plus @Valid on the controller parameter = "check before entering".
+
+ If a rule fails, Spring rejects the request BEFORE your service
+ runs, and our exception handler turns it into a clean 400 answer.
+ NOTE: validation lives on the DTO, NOT on the entity - another
+ reason DTOs exist!
+
+---------------------------------------------------------------------
+ 1.5  WHAT IS EXCEPTION HANDLING?
+---------------------------------------------------------------------
+ Without it: an error shows an ugly 500 page / stack trace.
+ With it: every error becomes a clean, predictable JSON:
+
+    { "timestamp": "...", "status": 404,
+      "message": "Employee not found with id: 99" }
+
+ One class (@RestControllerAdvice) catches exceptions from ALL
+ controllers in one place - write once, applies everywhere.
+
+---------------------------------------------------------------------
+ 1.6  HOW DO WE CONTROL THE STATUS CODE? (@ResponseStatus)
+---------------------------------------------------------------------
+ Every HTTP response has TWO parts:
+    1. STATUS CODE - the number (200, 201, 400, 404...)
+    2. BODY        - the JSON content
+
+ When a controller/handler method returns an object, Spring turns
+ it into JSON (the BODY) and sends status 200 OK by DEFAULT.
+
+ But sometimes 200 is wrong:
+    * create   -> should be 201 Created
+    * not found-> should be 404 Not Found
+    * bad input-> should be 400 Bad Request
+
+ SIMPLEST FIX: put the status on the METHOD as an annotation:
+
+    @ResponseStatus(HttpStatus.NOT_FOUND)   // <- the NUMBER
+    public Map<String, Object> handle(...) {
+        return error;                        // <- the JSON BODY
+    }
+
+ Two jobs, two places - easy to read, easy to teach:
+    @ResponseStatus  = "what NUMBER to send"
+    return value     = "what JSON to send"
+
+ (Spring also has a class called ResponseEntity for the rare case
+  where the status must be DECIDED AT RUNTIME inside the method.
+  We do not need that here - annotations keep everything simple.)
+
+
+=====================================================================
+ PART 2 : PROJECT STRUCTURE
+=====================================================================
+
+ employee-api/
+ |-- pom.xml
+ |-- src/main/resources/application.properties
+ |-- src/main/java/com/example/employeeapi/
+       |-- EmployeeApiApplication.java        <- main class
+       |-- config/
+       |     |-- AppConfig.java               <- ModelMapper @Bean
+       |-- entity/
+       |     |-- Employee.java                <- DB table (7 fields)
+       |-- dto/
+       |     |-- EmployeeRequestDTO.java      <- client SENDS this
+       |     |-- EmployeeResponseDTO.java     <- client RECEIVES this
+       |-- repository/
+       |     |-- EmployeeRepository.java
+       |-- service/
+       |     |-- EmployeeService.java         <- conversions live here
+       |-- controller/
+       |     |-- EmployeeController.java
+       |-- exception/
+             |-- EmployeeNotFoundException.java
+             |-- GlobalExceptionHandler.java
+
+ REMEMBER: all packages UNDER com.example.employeeapi, or Spring
+ silently ignores them (endpoints 404 with no error).
+
+
+=====================================================================
+ PART 3 : CODE (EVERY FILE, EXPLAINED)
+=====================================================================
+
+---------------------------------------------------------------------
+ 3.1  pom.xml - THE DEPENDENCIES (inside <dependencies>)
+---------------------------------------------------------------------
+    <!-- REST + embedded Tomcat + JSON -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- JPA/Hibernate (DB layer) -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-data-jpa</artifactId>
+    </dependency>
+
+    <!-- H2 in-memory database -->
+    <dependency>
+        <groupId>com.h2database</groupId>
+        <artifactId>h2</artifactId>
+        <scope>runtime</scope>
+    </dependency>
+
+    <!-- VALIDATION (@NotBlank, @Min, @Valid...) -->
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-validation</artifactId>
+    </dependency>
+
+    <!-- MODELMAPPER (not a Spring starter - it is a normal library,
+         so it NEEDS a version number!) -->
+    <dependency>
+        <groupId>org.modelmapper</groupId>
+        <artifactId>modelmapper</artifactId>
+        <version>3.2.0</version>
+    </dependency>
+
+---------------------------------------------------------------------
+ 3.2  application.properties
+---------------------------------------------------------------------
+spring.application.name=employee-api
+
+spring.datasource.url=jdbc:h2:mem:employeedb
+spring.datasource.username=sa
+spring.datasource.password=
+
+spring.jpa.hibernate.ddl-auto=update
+spring.jpa.show-sql=true
+
+spring.h2.console.enabled=true
+# H2 console: http://localhost:8080/h2-console (JDBC URL above)
+
+---------------------------------------------------------------------
+ 3.3  entity/Employee.java  (YOUR EXACT FIELDS)
+---------------------------------------------------------------------
+package com.example.employeeapi.entity;
+
+import jakarta.persistence.*;
+import java.time.LocalDateTime;
+
+@Entity
+public class Employee {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private int id;
+
+    private String name;
+    private String dept;
+    private int age;
+
+    private LocalDateTime createdDate;
+    private LocalDateTime updatedTime;
+    private boolean isDeleted;
+
+    @PrePersist          // runs automatically BEFORE first INSERT
+    public void onCreate() {
+        this.createdDate = LocalDateTime.now();
+        this.updatedTime = LocalDateTime.now();
+        this.isDeleted = false;
+    }
+
+    @PreUpdate           // runs automatically BEFORE every UPDATE
+    public void onUpdate() {
+        this.updatedTime = LocalDateTime.now();
+    }
+
+    public Employee() { }        // JPA needs a no-arg constructor
+
+    // getters & setters (all fields)
+    public int getId() { return id; }
+    public void setId(int id) { this.id = id; }
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    public String getDept() { return dept; }
+    public void setDept(String dept) { this.dept = dept; }
+    public int getAge() { return age; }
+    public void setAge(int age) { this.age = age; }
+    public LocalDateTime getCreatedDate() { return createdDate; }
+    public void setCreatedDate(LocalDateTime createdDate) { this.createdDate = createdDate; }
+    public LocalDateTime getUpdatedTime() { return updatedTime; }
+    public void setUpdatedTime(LocalDateTime updatedTime) { this.updatedTime = updatedTime; }
+    public boolean isDeleted() { return isDeleted; }
+    public void setDeleted(boolean deleted) { isDeleted = deleted; }
+}
+
+ EXPLANATION:
+  * @PrePersist/@PreUpdate: timestamps + isDeleted are set
+    AUTOMATICALLY. The client can never control them - and now,
+    thanks to DTOs, the client cannot even SEND them.
+  * NO validation annotations here - validation belongs on the
+    request DTO (the entity trusts the service layer).
+
+---------------------------------------------------------------------
+ 3.4  dto/EmployeeRequestDTO.java  (client SENDS this + VALIDATION)
+---------------------------------------------------------------------
+package com.example.employeeapi.dto;
+
+import jakarta.validation.constraints.Max;
+import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+
+// ONLY the fields a client is ALLOWED to send. No id, no
+// timestamps, no isDeleted - the server owns those.
+public class EmployeeRequestDTO {
+
+    @NotBlank(message = "Name is required")
+    @Size(min = 2, max = 50, message = "Name must be 2 to 50 characters")
+    private String name;
+
+    @NotBlank(message = "Department is required")
+    private String dept;
+
+    @Min(value = 18, message = "Age must be at least 18")
+    @Max(value = 60, message = "Age must be at most 60")
+    private int age;
+
+    // getters & setters
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    public String getDept() { return dept; }
+    public void setDept(String dept) { this.dept = dept; }
+    public int getAge() { return age; }
+    public void setAge(int age) { this.age = age; }
+}
+
+ EXPLANATION:
+  * Each annotation = one rule + its error message.
+  * @NotBlank (for text) = not null AND not empty/spaces.
+    (@NotNull alone would allow "".)
+  * Rules fire only where @Valid is used (see controller).
+
+---------------------------------------------------------------------
+ 3.5  dto/EmployeeResponseDTO.java  (client RECEIVES this)
+---------------------------------------------------------------------
+package com.example.employeeapi.dto;
+
+import java.time.LocalDateTime;
+
+// ONLY the fields a client is ALLOWED to see.
+// Note: NO isDeleted - internal flag stays internal!
+public class EmployeeResponseDTO {
+
+    private int id;
+    private String name;
+    private String dept;
+    private int age;
+    private LocalDateTime createdDate;
+    private LocalDateTime updatedTime;
+
+    // getters & setters
+    public int getId() { return id; }
+    public void setId(int id) { this.id = id; }
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    public String getDept() { return dept; }
+    public void setDept(String dept) { this.dept = dept; }
+    public int getAge() { return age; }
+    public void setAge(int age) { this.age = age; }
+    public LocalDateTime getCreatedDate() { return createdDate; }
+    public void setCreatedDate(LocalDateTime createdDate) { this.createdDate = createdDate; }
+    public LocalDateTime getUpdatedTime() { return updatedTime; }
+    public void setUpdatedTime(LocalDateTime updatedTime) { this.updatedTime = updatedTime; }
+}
+
+---------------------------------------------------------------------
+ 3.6  config/AppConfig.java  (MODELMAPPER AS A BEAN)
+---------------------------------------------------------------------
+package com.example.employeeapi.config;
+
+import org.modelmapper.ModelMapper;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+
+@Configuration
+public class AppConfig {
+
+    @Bean                      // create ONE ModelMapper for the
+    public ModelMapper modelMapper() {   // whole application
+        return new ModelMapper();
+    }
+}
+
+ EXPLANATION:
+  * ModelMapper is a 3rd-party class - Spring doesn't know it.
+    @Bean tells Spring: "create it once, manage it, inject it
+    wherever asked." (This is the @Bean vs @Component story:
+    @Bean is for classes you cannot annotate yourself.)
+  * One shared instance is enough - it is thread-safe for mapping.
+
+---------------------------------------------------------------------
+ 3.7  repository/EmployeeRepository.java
+---------------------------------------------------------------------
+package com.example.employeeapi.repository;
+
+import com.example.employeeapi.entity.Employee;
+import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.stereotype.Repository;
+
+import java.util.List;
+import java.util.Optional;
+
+@Repository
+public interface EmployeeRepository extends JpaRepository<Employee, Integer> {
+
+    // Spring builds the SQL from the METHOD NAME:
+    List<Employee> findByIsDeletedFalse();
+    Optional<Employee> findByIdAndIsDeletedFalse(int id);
+}
+
+---------------------------------------------------------------------
+ 3.8  service/EmployeeService.java  (CONVERSIONS LIVE HERE)
+---------------------------------------------------------------------
+package com.example.employeeapi.service;
+
+import com.example.employeeapi.dto.EmployeeRequestDTO;
+import com.example.employeeapi.dto.EmployeeResponseDTO;
+import com.example.employeeapi.entity.Employee;
+import com.example.employeeapi.exception.EmployeeNotFoundException;
+import com.example.employeeapi.repository.EmployeeRepository;
+import org.modelmapper.ModelMapper;
+import org.springframework.stereotype.Service;
+
+import java.util.List;
+
+@Service
+public class EmployeeService {
+
+    private final EmployeeRepository employeeRepository;
+    private final ModelMapper modelMapper;
+
+    // constructor injection - Spring supplies both beans
+    public EmployeeService(EmployeeRepository employeeRepository,
+                           ModelMapper modelMapper) {
+        this.employeeRepository = employeeRepository;
+        this.modelMapper = modelMapper;
+    }
+
+    // CREATE ------------------------------------------------------
+    public EmployeeResponseDTO create(EmployeeRequestDTO employeeRequestDTO) {
+
+        // DTO -> ENTITY (ModelMapper copies name, dept, age)
+        Employee employee = modelMapper.map(employeeRequestDTO, Employee.class);
+
+        Employee savedEmployee = employeeRepository.save(employee);
+        // (@PrePersist filled createdDate/updatedTime/isDeleted)
+
+        // ENTITY -> RESPONSE DTO
+        return modelMapper.map(savedEmployee, EmployeeResponseDTO.class);
+    }
+
+    // READ ALL (active only) ---------------------------------------
+    public List<EmployeeResponseDTO> getAllEmployees() {
+        return employeeRepository.findByIsDeletedFalse()
+                .stream()
+                .map(employee -> modelMapper.map(employee, EmployeeResponseDTO.class))
+                .toList();
+    }
+
+    // READ ONE ------------------------------------------------------
+    public EmployeeResponseDTO getEmployeeById(int id) {
+        Employee employee = findActiveEmployee(id);
+        return modelMapper.map(employee, EmployeeResponseDTO.class);
+    }
+
+    // UPDATE --------------------------------------------------------
+    public EmployeeResponseDTO update(int id, EmployeeRequestDTO employeeRequestDTO) {
+        Employee existingEmployee = findActiveEmployee(id);
+
+        // copy dto fields ONTO the existing entity
+        // (2-arg map: source -> destination object, in place)
+        modelMapper.map(employeeRequestDTO, existingEmployee);
+
+        Employee updatedEmployee = employeeRepository.save(existingEmployee);
+        // (@PreUpdate refreshed updatedTime; createdDate untouched)
+
+        return modelMapper.map(updatedEmployee, EmployeeResponseDTO.class);
+    }
+
+    // SOFT DELETE ----------------------------------------------------
+    public void softDelete(int id) {
+        Employee existingEmployee = findActiveEmployee(id);
+        existingEmployee.setDeleted(true);   // flip the flag - no real delete
+        employeeRepository.save(existingEmployee);
+    }
+
+    // private helper - one place for the "404 or found" logic
+    private Employee findActiveEmployee(int id) {
+        return employeeRepository.findByIdAndIsDeletedFalse(id)
+                .orElseThrow(() -> new EmployeeNotFoundException(id));
+    }
+}
+
+ EXPLANATION:
+  * The service is the ONLY place that knows both worlds
+    (DTOs and entities). Controller never sees the entity;
+    repository never sees a DTO. Clean borders.
+  * modelMapper.map(src, Target.class) -> creates a NEW object.
+  * modelMapper.map(src, existingObject) -> copies INTO an
+    existing object (used in update, so id/createdDate survive).
+
+---------------------------------------------------------------------
+ 3.9  controller/EmployeeController.java  (with @Valid)
+---------------------------------------------------------------------
+package com.example.employeeapi.controller;
+
+import com.example.employeeapi.dto.EmployeeRequestDTO;
+import com.example.employeeapi.dto.EmployeeResponseDTO;
+import com.example.employeeapi.service.EmployeeService;
+import jakarta.validation.Valid;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/employees")
+public class EmployeeController {
+
+    private final EmployeeService employeeService;
+
+    public EmployeeController(EmployeeService employeeService) {
+        this.employeeService = employeeService;
+    }
+
+    // CREATE : POST /api/employees
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)      // send 201, not default 200
+    public EmployeeResponseDTO createEmployee(
+            @Valid @RequestBody EmployeeRequestDTO employeeRequestDTO) {
+        //  ^^^^^ = "run the validation rules BEFORE entering"
+        return employeeService.create(employeeRequestDTO);                // 201
+    }
+
+    // READ ALL : GET /api/employees
+    @GetMapping
+    public List<EmployeeResponseDTO> getAllEmployees() {
+        return employeeService.getAllEmployees();                         // 200
+    }
+
+    // READ ONE : GET /api/employees/1
+    @GetMapping("/{id}")
+    public EmployeeResponseDTO getEmployeeById(@PathVariable int id) {
+        return employeeService.getEmployeeById(id);                       // 200/404
+    }
+
+    // UPDATE : PUT /api/employees/1
+    @PutMapping("/{id}")
+    public EmployeeResponseDTO updateEmployee(@PathVariable int id,
+            @Valid @RequestBody EmployeeRequestDTO employeeRequestDTO) {
+        return employeeService.update(id, employeeRequestDTO);            // 200/404
+    }
+
+    // SOFT DELETE : DELETE /api/employees/1
+    @DeleteMapping("/{id}")
+    public Map<String, String> deleteEmployee(@PathVariable int id) {
+        employeeService.softDelete(id);
+        return Map.of("message",
+                "Employee " + id + " deleted (soft delete)");             // 200
+    }
+}
+
+ EXPLANATION:
+  * Controller receives/returns DTOs ONLY - never the entity.
+  * Every method simply RETURNS the data (the JSON body). Spring
+    sends 200 OK by default; where we want a different number,
+    @ResponseStatus on the method changes it (create -> 201).
+  * @Valid on the @RequestBody = trigger the DTO's rules; a
+    failure throws MethodArgumentNotValidException, which our
+    handler below converts into a clean 400.
+
+---------------------------------------------------------------------
+ 3.10  exception/EmployeeNotFoundException.java
+---------------------------------------------------------------------
+package com.example.employeeapi.exception;
+
+public class EmployeeNotFoundException extends RuntimeException {
+    public EmployeeNotFoundException(int id) {
+        super("Employee not found with id: " + id);
+    }
+}
+
+---------------------------------------------------------------------
+ 3.11  exception/GlobalExceptionHandler.java  (404 + 400 handlers)
+---------------------------------------------------------------------
+package com.example.employeeapi.exception;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.ResponseStatus;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+import java.time.LocalDateTime;
+import java.util.HashMap;
+import java.util.Map;
+
+@RestControllerAdvice        // watches ALL controllers
+public class GlobalExceptionHandler {
+
+    // 404 - our own exception
+    @ExceptionHandler(EmployeeNotFoundException.class)   // WHICH exception
+    @ResponseStatus(HttpStatus.NOT_FOUND)                // WHAT status number
+    public Map<String, Object> handleNotFound(EmployeeNotFoundException ex) {
+
+        Map<String, Object> error = new HashMap<>();
+        error.put("timestamp", LocalDateTime.now().toString());
+        error.put("status", 404);
+        error.put("error", "Not Found");
+        error.put("message", ex.getMessage());
+        return error;                                    // WHAT JSON body
+    }
+
+    // 400 - validation failures (thrown by @Valid)
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String, Object> handleValidation(
+            MethodArgumentNotValidException ex) {
+
+        // collect every failed field with its message
+        Map<String, String> fieldErrors = new HashMap<>();
+        ex.getBindingResult().getFieldErrors().forEach(err ->
+                fieldErrors.put(err.getField(), err.getDefaultMessage()));
+
+        Map<String, Object> error = new HashMap<>();
+        error.put("timestamp", LocalDateTime.now().toString());
+        error.put("status", 400);
+        error.put("error", "Validation Failed");
+        error.put("fields", fieldErrors);
+        return error;
+    }
+}
+
+ EXPLANATION:
+  * Two handlers, one class, applies to every controller.
+  * Read each handler as THREE simple parts:
+       @ExceptionHandler(...)  -> WHICH exception it catches
+       @ResponseStatus(...)    -> WHAT status number to send
+       return error;           -> WHAT JSON body to send
+    No ResponseEntity needed - the annotation sets the number,
+    the returned Map becomes the JSON.
+  * The validation handler loops through ALL failed fields, so
+    the client sees every problem at once - not one by one.
+
+
+=====================================================================
+ PART 4 : API TESTING USING POSTMAN (STEP BY STEP)
+=====================================================================
+
+ SETUP: run the app. Open Postman. Base URL: http://localhost:8080
+
+---------------------------------------------------------------------
+ TEST 1 - CREATE (valid)                        expected: 201 Created
+---------------------------------------------------------------------
+   Method : POST
+   URL    : http://localhost:8080/api/employees
+   Body   : (select: Body -> raw -> JSON)
+      { "name": "Rahul", "dept": "IT", "age": 28 }
+
+   EXPECTED RESPONSE:
+      {
+        "id": 1, "name": "Rahul", "dept": "IT", "age": 28,
+        "createdDate": "2026-07-06T11:20:15.123",
+        "updatedTime": "2026-07-06T11:20:15.123"
+      }
+   NOTICE: no "isDeleted" in the response - the ResponseDTO hid it!
+
+---------------------------------------------------------------------
+ TEST 2 - CREATE (INVALID - watch validation work)  expected: 400
+---------------------------------------------------------------------
+   Method : POST     URL: same
+   Body   :
+      { "name": "", "dept": "", "age": 15 }
+
+   EXPECTED RESPONSE (400 Bad Request):
+      {
+        "timestamp": "...",
+        "status": 400,
+        "error": "Validation Failed",
+        "fields": {
+          "name": "Name is required",
+          "dept": "Department is required",
+          "age":  "Age must be at least 18"
+        }
+      }
+   ALL three problems reported together. Nothing reached the DB.
+
+---------------------------------------------------------------------
+ TEST 3 - READ ALL                               expected: 200 OK
+---------------------------------------------------------------------
+   Method : GET
+   URL    : http://localhost:8080/api/employees
+   -> array of employees (only active ones)
+
+---------------------------------------------------------------------
+ TEST 4 - READ ONE                               expected: 200 OK
+---------------------------------------------------------------------
+   Method : GET
+   URL    : http://localhost:8080/api/employees/1
+
+---------------------------------------------------------------------
+ TEST 5 - READ MISSING                           expected: 404
+---------------------------------------------------------------------
+   Method : GET
+   URL    : http://localhost:8080/api/employees/99
+   EXPECTED:
+      { "timestamp": "...", "status": 404, "error": "Not Found",
+        "message": "Employee not found with id: 99" }
+
+---------------------------------------------------------------------
+ TEST 6 - UPDATE                                 expected: 200 OK
+---------------------------------------------------------------------
+   Method : PUT
+   URL    : http://localhost:8080/api/employees/1
+   Body   :
+      { "name": "Rahul Kumar", "dept": "Finance", "age": 29 }
+
+   CHECK IN THE RESPONSE:
+      * updatedTime  -> CHANGED (new time)
+      * createdDate  -> SAME as before (birth time never changes)
+
+---------------------------------------------------------------------
+ TEST 7 - SOFT DELETE                            expected: 200 OK
+---------------------------------------------------------------------
+   Method : DELETE
+   URL    : http://localhost:8080/api/employees/1
+   -> { "message": "Employee 1 deleted (soft delete)" }
+
+   PROVE IT:
+     a) GET /api/employees      -> employee 1 GONE from the list
+     b) GET /api/employees/1    -> 404
+     c) H2 console (http://localhost:8080/h2-console,
+        JDBC URL: jdbc:h2:mem:employeedb, user sa, empty password):
+           SELECT * FROM EMPLOYEE;
+        -> the row IS STILL THERE with IS_DELETED = TRUE.
+     "The API says he's gone; the database still remembers him."
+
+ POSTMAN TIPS:
+   * Save all 7 requests into a COLLECTION ("Employee API") - one
+     click re-testing forever, and you can share the collection.
+   * Status code shows top-right of the response panel; check it
+     EVERY time, not just the body.
+
+
+=====================================================================
+ PART 5 : POINTS TO REMEMBER
+=====================================================================
+
+ ABOUT MODELMAPPER (asked in interviews!):
+  1. It maps fields BY NAME using reflection:
+     source.getName() -> target.setName(). Same-name fields copy
+     automatically; extra fields on either side are ignored.
+  2. It is NOT a Spring library - add the dependency WITH a
+     version, and register it yourself as a @Bean (@Configuration).
+     One shared instance for the whole app.
+  3. Two forms of map():
+        map(src, Target.class)  -> creates and returns NEW object
+        map(src, existingObj)   -> copies INTO existing object
+                                   (perfect for UPDATE operations)
+  4. Name mismatch = field silently stays null/0 - NO error!
+     If DTO has "department" but entity has "dept", nothing copies.
+     Keep names identical (simplest) or configure explicit mapping.
+  5. Watch booleans like isDeleted: unusual getter/setter names
+     can confuse mapping. (We avoided the problem: no DTO carries
+     isDeleted at all.)
+  6. Reflection has a small runtime cost. For huge-scale projects,
+     MapStruct (generates the code at COMPILE time) is the faster
+     alternative - same idea, different mechanism. For learning
+     and most apps, ModelMapper is perfectly fine.
+
+ ABOUT DTOs:
+  7. RequestDTO = only what the client MAY SEND (name, dept, age).
+     ResponseDTO = only what the client MAY SEE (no isDeleted).
+     Entity = internal, mirrors the DB, NEVER leaves the service.
+  8. Validation annotations live on the REQUEST DTO - the entity
+     stays clean.
+
+ ABOUT THE LAYERS:
+  9. Controller: HTTP + DTOs only. Service: logic + conversions.
+     Repository: DB only. "Thin, smart, dumb."
+ 10. Constructor injection everywhere - testable, fails fast.
+
+ ABOUT NAMING CONVENTIONS (professional code reads like prose):
+ 11. Variable/parameter name = camelCase of its TYPE or its ROLE:
+        EmployeeRequestDTO employeeRequestDTO   (not "request")
+        EmployeeRepository employeeRepository   (not "repository")
+        Employee existingEmployee / savedEmployee / updatedEmployee
+     The name should tell you WHAT it holds without looking at
+     the type.
+ 12. Method names say the full action and subject:
+        getAllEmployees(), getEmployeeById(), createEmployee(),
+        updateEmployee(), deleteEmployee()
+     A reader (or an API doc generator) understands them without
+     opening the method body.
+
+ ABOUT VALIDATION + ERRORS:
+ 13. @Valid on the controller parameter is what TRIGGERS the DTO
+     rules - annotations alone do nothing without it.
+ 14. One @RestControllerAdvice class = clean JSON for every error:
+     404 (our exception), 400 (validation, all fields at once).
+
+ ABOUT STATUS CODES:
+ 15. Returning an object = 200 OK by default. To send a different
+     number, put @ResponseStatus(HttpStatus.XXX) on the method:
+        create      -> @ResponseStatus(HttpStatus.CREATED)      201
+        not found   -> @ResponseStatus(HttpStatus.NOT_FOUND)    404
+        bad input   -> @ResponseStatus(HttpStatus.BAD_REQUEST)  400
+     Annotation = the NUMBER, return value = the JSON. Simple.
+ 16. ResponseEntity (you may see it in other codebases) does the
+     same job in code instead of an annotation:
+        return ResponseEntity.status(HttpStatus.CREATED).body(dto);
+     Use it ONLY when the status must be DECIDED AT RUNTIME
+     (e.g., same method sometimes returns 200, sometimes 202).
+     For fixed statuses like ours, @ResponseStatus is cleaner.
+
+ THE FLOW TO REMEMBER (one line):
+   JSON -> RequestDTO --@Valid--> ModelMapper -> Entity -> DB
+   DB -> Entity -> ModelMapper -> ResponseDTO -> JSON
+=====================================================================
+ END
+=====================================================================
