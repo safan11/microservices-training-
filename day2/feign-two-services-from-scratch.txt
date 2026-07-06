@@ -1,0 +1,691 @@
+=====================================================================
+ FEIGN CLIENT - MICROSERVICE COMMUNICATION - SIMPLE GUIDE
+=====================================================================
+ Two Spring Boot apps running together:
+    product-service (port 8080)  - knows the products and prices
+    order-service   (port 8081)  - asks product-service via FEIGN
+
+ HOW TO USE THIS GUIDE:
+    LEVEL 1 = build the smallest working demo (ONE api calling
+              ONE api). Get the "aha" moment first.
+    LEVEL 2 = add more APIs (catalog, quantity, bill calculation).
+    LEVEL 3 = add the fallback (Plan B when a service is down).
+ Do them IN ORDER. Do not read Level 3 before Level 1 works!
+=====================================================================
+
+
+=====================================================================
+ THE IDEA IN 3 SENTENCES (all the theory you need to start)
+=====================================================================
+ 1. Two separate apps run at the same time - like two shops
+    on one street.
+ 2. order-service does NOT know product prices - only
+    product-service knows them.
+ 3. Feign is the MESSENGER: order-service asks "what is product 1?"
+    and Feign carries the question and brings back the answer.
+
+ WHAT IS FEIGN, ONE LINE:
+    Feign = calling another application like a normal Java method.
+
+    ProductDTO p = productClient.getProductById(1);
+    // looks local - but behind the scenes Feign does:
+    // GET http://localhost:8080/products/1  and converts the JSON.
+
+ THE 3 THINGS FEIGN NEEDS (memorize only this):
+    1. DEPENDENCY : OpenFeign in pom.xml
+    2. SWITCH     : @EnableFeignClients on the main class
+    3. MENU CARD  : one @FeignClient interface listing the other
+                    service's endpoints
+
+ EACH FILE HAS ONE JOB (kitchen analogy):
+    ProductClient    = the MENU CARD of the other shop
+    ProductDTO       = the PLATE the food arrives on
+    OrderController  = the WAITER who takes your order
+    OrderResponse    = the FINAL BILL with everything on it
+    @EnableFeignClients = turning ON the PHONE LINE to the shop
+
+
+=====================================================================
+ THE MAP - PACKAGE STRUCTURE (both projects, final state)
+=====================================================================
+ (Workspace = any folder, e.g. C:\workspace)
+
+ <workspace>/product-service/                       port 8080
+ |-- pom.xml
+ |-- src/main/resources/application.properties      (1 line)
+ |-- src/main/java/com/example/productservice/
+       |-- ProductServiceApplication.java           (generated)
+       |-- model/Product.java
+       |-- controller/ProductController.java
+
+ <workspace>/order-service/                         port 8081
+ |-- pom.xml
+ |-- src/main/resources/application.properties
+ |-- src/main/java/com/example/orderservice/
+       |-- OrderServiceApplication.java             (+1 annotation)
+       |-- client/ProductClient.java                (Feign interface)
+       |-- client/ProductClientFallback.java        (Level 3 only)
+       |-- dto/ProductDTO.java
+       |-- dto/OrderResponse.java
+       |-- controller/OrderController.java
+
+ ALL APIs (the menu):
+   product-service:
+     GET /products               -> all products          (Level 2)
+     GET /products/{id}          -> one product           (Level 1)
+     GET /products/{id}/price    -> only the price        (Level 2)
+   order-service:
+     GET /orders/{productId}                -> order, qty=2   (Level 1)
+     GET /orders/products                   -> catalog        (Level 2)
+     GET /orders/{productId}/{quantity}     -> your quantity  (Level 2)
+     GET /orders/bill?productId=1&quantity=3 -> bill only     (Level 2)
+
+
+#####################################################################
+#####################################################################
+##   LEVEL 1 : THE SMALLEST WORKING DEMO                           ##
+##   one order API  calls  one product API                         ##
+#####################################################################
+#####################################################################
+
+=====================================================================
+ L1 - STEP 1 : CREATE product-service
+=====================================================================
+ Go to https://start.spring.io :
+    Project: Maven | Java: 17 | Spring Boot: 3.2.x (default)
+    Group: com.example | Artifact: product-service
+    Dependency: ONLY "Spring Web"
+ GENERATE -> unzip into your workspace -> open in IDE -> wait
+ for Maven to finish.
+
+ application.properties (1 line):
+
+    server.port=8080
+
+ Create packages:  model  and  controller
+ (right-click com.example.productservice -> New -> Package)
+
+---------------------------------------------------------------------
+ FILE: model/Product.java
+---------------------------------------------------------------------
+package com.example.productservice.model;
+
+public class Product {
+
+    private int id;
+    private String name;
+    private double price;
+
+    public Product(int id, String name, double price) {
+        this.id = id;
+        this.name = name;
+        this.price = price;
+    }
+
+    public int getId() { return id; }
+    public String getName() { return name; }
+    public double getPrice() { return price; }
+}
+
+---------------------------------------------------------------------
+ FILE: controller/ProductController.java   (ONE api for now)
+---------------------------------------------------------------------
+package com.example.productservice.controller;
+
+import com.example.productservice.model.Product;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+import java.util.List;
+
+@RestController
+@RequestMapping("/products")
+public class ProductController {
+
+    // hardcoded data - no database, keep it simple
+    private final List<Product> products = List.of(
+            new Product(1, "Laptop", 55000.0),
+            new Product(2, "Mobile", 20000.0),
+            new Product(3, "Headphones", 2000.0)
+    );
+
+    // GET http://localhost:8080/products/1
+    @GetMapping("/{id}")
+    public Product getProduct(@PathVariable int id) {
+        return products.stream()
+                .filter(p -> p.getId() == id)
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("Product not found: " + id));
+    }
+}
+
+---------------------------------------------------------------------
+ RUN + TEST product-service
+---------------------------------------------------------------------
+ Run ProductServiceApplication. Console: "Tomcat started on 8080".
+
+ Browser:  http://localhost:8080/products/1
+ Expected: { "id":1, "name":"Laptop", "price":55000.0 }
+
+ WORKS? -> KEEP IT RUNNING. Half done.
+
+
+=====================================================================
+ L1 - STEP 2 : CREATE order-service
+=====================================================================
+ https://start.spring.io again:
+    Group: com.example | Artifact: order-service | Java: 17
+    Dependencies: "Spring Web"  AND  "OpenFeign"
+ GENERATE -> unzip -> open in a NEW IDE window -> wait for Maven.
+
+ (Because OpenFeign was selected on the website, pom.xml is
+  already correct. Full pom.xml is in the APPENDIX at the bottom
+  if you ever need to check it.)
+
+ application.properties (2 lines):
+
+    spring.application.name=order-service
+    server.port=8081
+
+ Create packages:  client , dto , controller
+
+---------------------------------------------------------------------
+ FILE: OrderServiceApplication.java  - ADD ONE ANNOTATION
+---------------------------------------------------------------------
+package com.example.orderservice;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.openfeign.EnableFeignClients;
+
+@SpringBootApplication
+@EnableFeignClients      // <-- ADD THIS: turns the phone line ON
+public class OrderServiceApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(OrderServiceApplication.class, args);
+    }
+}
+
+---------------------------------------------------------------------
+ FILE: dto/ProductDTO.java   (the PLATE - shape of received data)
+---------------------------------------------------------------------
+package com.example.orderservice.dto;
+
+// Field names MUST match the JSON keys: id, name, price
+public class ProductDTO {
+
+    private int id;
+    private String name;
+    private double price;
+
+    public ProductDTO() { }
+
+    public ProductDTO(int id, String name, double price) {
+        this.id = id;
+        this.name = name;
+        this.price = price;
+    }
+
+    public int getId() { return id; }
+    public void setId(int id) { this.id = id; }
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    public double getPrice() { return price; }
+    public void setPrice(double price) { this.price = price; }
+}
+
+---------------------------------------------------------------------
+ FILE: client/ProductClient.java   (the MENU CARD - Feign magic)
+---------------------------------------------------------------------
+package com.example.orderservice.client;
+
+import com.example.orderservice.dto.ProductDTO;
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+
+@FeignClient(name = "product-service", url = "http://localhost:8080")
+public interface ProductClient {
+
+    // = GET http://localhost:8080/products/{id}
+    @GetMapping("/products/{id}")
+    ProductDTO getProductById(@PathVariable("id") int id);
+}
+
+ READ IT AS: "product-service lives at localhost:8080. When I call
+ getProductById(1), do the HTTP call and give me a ProductDTO."
+ It is an INTERFACE - you never write its implementation.
+
+---------------------------------------------------------------------
+ FILE: dto/OrderResponse.java   (the FINAL BILL)
+---------------------------------------------------------------------
+package com.example.orderservice.dto;
+
+public class OrderResponse {
+
+    private int orderId;
+    private int quantity;
+    private ProductDTO product;      // filled by the Feign call
+    private double totalAmount;      // price x quantity
+
+    public OrderResponse(int orderId, int quantity,
+                         ProductDTO product, double totalAmount) {
+        this.orderId = orderId;
+        this.quantity = quantity;
+        this.product = product;
+        this.totalAmount = totalAmount;
+    }
+
+    public int getOrderId() { return orderId; }
+    public int getQuantity() { return quantity; }
+    public ProductDTO getProduct() { return product; }
+    public double getTotalAmount() { return totalAmount; }
+}
+
+---------------------------------------------------------------------
+ FILE: controller/OrderController.java   (the WAITER - one API)
+---------------------------------------------------------------------
+package com.example.orderservice.controller;
+
+import com.example.orderservice.client.ProductClient;
+import com.example.orderservice.dto.OrderResponse;
+import com.example.orderservice.dto.ProductDTO;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+@RequestMapping("/orders")
+public class OrderController {
+
+    private final ProductClient productClient;
+
+    public OrderController(ProductClient productClient) {
+        this.productClient = productClient;    // Spring injects it
+    }
+
+    // GET http://localhost:8081/orders/1
+    @GetMapping("/{productId}")
+    public OrderResponse getOrder(@PathVariable int productId) {
+
+        int quantity = 2;                                 // fixed for now
+
+        // *** THE MICROSERVICE CALL - ONE LINE ***
+        ProductDTO product = productClient.getProductById(productId);
+
+        double total = product.getPrice() * quantity;     // calculation
+
+        return new OrderResponse(101, quantity, product, total);
+    }
+}
+
+=====================================================================
+ L1 - STEP 3 : THE "AHA" MOMENT
+=====================================================================
+ 1. product-service still running on 8080? good.
+ 2. START order-service (8081). Two apps running together now.
+ 3. Browser:  http://localhost:8081/orders/1
+
+ EXPECTED:
+    {
+      "orderId": 101,
+      "quantity": 2,
+      "product": { "id":1, "name":"Laptop", "price":55000.0 },
+      "totalAmount": 110000.0
+    }
+
+ SAY OUT LOUD: "order-service has NO product data. The Laptop and
+ its price travelled from product-service through Feign, then
+ order-service calculated 55000 x 2."
+
+ *** LEVEL 1 COMPLETE. Only continue when this works! ***
+
+
+#####################################################################
+#####################################################################
+##   LEVEL 2 : MORE APIs (catalog, your quantity, bill)            ##
+#####################################################################
+#####################################################################
+
+ Now that one call works, adding more is just repetition.
+
+---------------------------------------------------------------------
+ L2 - STEP 1 : add 2 more APIs to ProductController
+---------------------------------------------------------------------
+ Add INSIDE the ProductController class (keep the existing API):
+
+    // GET http://localhost:8080/products        -> full catalog
+    @GetMapping
+    public List<Product> getAllProducts() {
+        return products;
+    }
+
+    // GET http://localhost:8080/products/1/price -> just the price
+    @GetMapping("/{id}/price")
+    public double getPrice(@PathVariable int id) {
+        return getProduct(id).getPrice();
+    }
+
+ RESTART product-service. Test both in the browser.
+
+---------------------------------------------------------------------
+ L2 - STEP 2 : add 2 more methods to ProductClient (mirror them!)
+---------------------------------------------------------------------
+ The Feign interface now mirrors all 3 product APIs.
+ Add imports: java.util.List
+
+    // = GET http://localhost:8080/products
+    @GetMapping("/products")
+    List<ProductDTO> getAllProducts();
+
+    // = GET http://localhost:8080/products/{id}/price
+    @GetMapping("/products/{id}/price")
+    double getPrice(@PathVariable("id") int id);
+
+---------------------------------------------------------------------
+ L2 - STEP 3 : add 3 more APIs to OrderController
+---------------------------------------------------------------------
+ Add imports:  java.util.List , java.util.Map ,
+               org.springframework.web.bind.annotation.RequestParam
+
+    // API: GET http://localhost:8081/orders/products
+    //      "show the catalog" - Feign fetches ALL products
+    @GetMapping("/products")
+    public List<ProductDTO> browseCatalog() {
+        return productClient.getAllProducts();           // FEIGN CALL
+    }
+
+    // API: GET http://localhost:8081/orders/1/3
+    //      quantity comes from the URL path
+    @GetMapping("/{productId}/{quantity}")
+    public OrderResponse getOrderWithQuantity(@PathVariable int productId,
+                                              @PathVariable int quantity) {
+
+        ProductDTO product = productClient.getProductById(productId);  // FEIGN
+
+        double total = product.getPrice() * quantity;                  // MATHS
+
+        return new OrderResponse(102, quantity, product, total);
+    }
+
+    // API: GET http://localhost:8081/orders/bill?productId=1&quantity=3
+    //      inputs from query params + uses the lighter /price API
+    @GetMapping("/bill")
+    public Map<String, Object> getBill(@RequestParam int productId,
+                                       @RequestParam int quantity) {
+
+        double price = productClient.getPrice(productId);   // FEIGN
+        double total = price * quantity;                     // MATHS
+
+        return Map.of(
+                "productId", productId,
+                "unitPrice", price,
+                "quantity", quantity,
+                "billAmount", total
+        );
+    }
+
+---------------------------------------------------------------------
+ L2 - STEP 4 : RESTART order-service and TEST
+---------------------------------------------------------------------
+ GET http://localhost:8081/orders/products
+   -> list of all 3 products (came through Feign)
+
+ GET http://localhost:8081/orders/2/5
+   -> Mobile x 5 -> "totalAmount": 100000.0
+   (change numbers in the URL - the maths follows!)
+
+ GET http://localhost:8081/orders/bill?productId=3&quantity=4
+   -> { "productId":3, "unitPrice":2000.0,
+        "quantity":4, "billAmount":8000.0 }
+
+ WHAT EACH API TAUGHT:
+   /orders/products   -> Feign can return a LIST
+   /orders/{id}/{qty} -> read inputs from the URL PATH
+   /orders/bill?...   -> read inputs from QUERY PARAMS + call a
+                         lighter API when you need less data
+
+ *** LEVEL 2 COMPLETE ***
+
+
+#####################################################################
+#####################################################################
+##   LEVEL 3 : FALLBACK (Plan B when product-service is down)      ##
+#####################################################################
+#####################################################################
+
+ WHY: a Feign call is a REAL network call. If product-service is
+ down, order-service currently throws an ugly 500 error.
+
+ FALLBACK IN ONE LINE:
+   "The answer you give when the other shop is closed."
+ Like a food app saying "Payment unavailable - try Cash on
+ Delivery" instead of showing a crash page.
+
+---------------------------------------------------------------------
+ L3 - STEP 1 : add ONE dependency to order-service pom.xml
+---------------------------------------------------------------------
+ Inside <dependencies>:
+
+    <dependency>
+        <groupId>org.springframework.cloud</groupId>
+        <artifactId>spring-cloud-starter-circuitbreaker-resilience4j</artifactId>
+    </dependency>
+
+ Then RELOAD MAVEN.
+
+---------------------------------------------------------------------
+ L3 - STEP 2 : add ONE line to application.properties
+---------------------------------------------------------------------
+    spring.cloud.openfeign.circuitbreaker.enabled=true
+
+ (This is the switch that makes Feign use fallbacks.)
+
+---------------------------------------------------------------------
+ L3 - STEP 3 : FILE: client/ProductClientFallback.java  (PLAN B)
+---------------------------------------------------------------------
+package com.example.orderservice.client;
+
+import com.example.orderservice.dto.ProductDTO;
+import org.springframework.stereotype.Component;
+
+import java.util.List;
+
+// Runs ONLY when the real call fails. Same interface,
+// but every method returns a SAFE DEFAULT answer.
+@Component
+public class ProductClientFallback implements ProductClient {
+
+    @Override
+    public List<ProductDTO> getAllProducts() {
+        return List.of();                    // empty catalog
+    }
+
+    @Override
+    public ProductDTO getProductById(int id) {
+        return new ProductDTO(id, "UNKNOWN (product-service down)", 0.0);
+    }
+
+    @Override
+    public double getPrice(int id) {
+        return 0.0;
+    }
+}
+
+ NOTE: @Component is REQUIRED (Spring must manage this class).
+
+---------------------------------------------------------------------
+ L3 - STEP 4 : connect it - ONE word in ProductClient
+---------------------------------------------------------------------
+ Change the @FeignClient line to:
+
+    @FeignClient(name = "product-service",
+                 url = "http://localhost:8080",
+                 fallback = ProductClientFallback.class)   // <- ADD
+
+---------------------------------------------------------------------
+ L3 - STEP 5 : THE FALLBACK DEMO
+---------------------------------------------------------------------
+ 1. Restart order-service. Confirm /orders/1 works normally.
+ 2. STOP product-service. (It is really gone now.)
+ 3. GET http://localhost:8081/orders/1/3
+    -> NO error! Instead:
+    {
+      "orderId": 102, "quantity": 3,
+      "product": { "id":1,
+                   "name":"UNKNOWN (product-service down)",
+                   "price":0.0 },
+      "totalAmount": 0.0
+    }
+ 4. GET http://localhost:8081/orders/products  ->  []
+ 5. START product-service again -> real data comes back.
+
+ SAY OUT LOUD: "The other service died, but ours kept answering
+ with a safe default. The failure did NOT spread."
+
+ *** LEVEL 3 COMPLETE - full demo done! ***
+
+
+=====================================================================
+ IF SOMETHING FAILS (quick fixes)
+=====================================================================
+ "No qualifying bean of type ProductClient"
+    -> @EnableFeignClients missing on the main class.
+ "Connection refused"
+    -> product-service not running on 8080 (and no fallback yet).
+ 404 from Feign
+    -> paths in ProductClient must EXACTLY match product-service's
+       endpoints (/products, /products/{id}, /products/{id}/price).
+ product fields null / 0 (service running fine)
+    -> ProductDTO field names must match JSON keys exactly.
+ Fallback never triggers
+    -> missing: the resilience4j dependency (L3 step 1), OR the
+       properties switch (L3 step 2), OR @Component on the
+       fallback class (L3 step 3).
+ App runs but endpoints 404
+    -> packages must be UNDER com.example.orderservice
+       (a package outside the main package is silently ignored).
+ "Port already in use"
+    -> an old run is still alive; stop all runs and start again.
+
+
+=====================================================================
+ APPENDIX : FULL pom.xml FILES (for checking/reference only)
+=====================================================================
+
+ --- product-service/pom.xml -----------------------------------------
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.5</version>
+        <relativePath/>
+    </parent>
+    <groupId>com.example</groupId>
+    <artifactId>product-service</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <properties>
+        <java.version>17</java.version>
+    </properties>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+
+ --- order-service/pom.xml (after Level 3) ---------------------------
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.2.5</version>
+        <relativePath/>
+    </parent>
+    <groupId>com.example</groupId>
+    <artifactId>order-service</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <properties>
+        <java.version>17</java.version>
+        <spring-cloud.version>2023.0.1</spring-cloud.version>
+    </properties>
+    <dependencyManagement>
+        <dependencies>
+            <!-- keeps all Spring Cloud pieces version-compatible -->
+            <dependency>
+                <groupId>org.springframework.cloud</groupId>
+                <artifactId>spring-cloud-dependencies</artifactId>
+                <version>${spring-cloud.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+    <dependencies>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-openfeign</artifactId>
+        </dependency>
+        <!-- Level 3 only: fallback / circuit breaker -->
+        <dependency>
+            <groupId>org.springframework.cloud</groupId>
+            <artifactId>spring-cloud-starter-circuitbreaker-resilience4j</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+
+=====================================================================
+ REMEMBER - FEIGN NEEDS ONLY 3 THINGS:
+   1. OpenFeign dependency
+   2. @EnableFeignClients on the main class
+   3. @FeignClient interface (the menu card)
+ Fallback adds 3 more small things:
+   dependency + properties switch + a @Component Plan-B class.
+=====================================================================
+ END
+=====================================================================
