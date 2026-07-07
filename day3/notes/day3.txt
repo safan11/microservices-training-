@@ -1,0 +1,23 @@
+Day 3:-
+---------
+ ->1. spring about rest api 
+ ->2. micorservices  
+       1. sync 
+       2. async ( kafka)
+
+========================================================= 
+ ->kafka is distrbuted event system.  
+
+ -> hunger box->    (millions of user can place the order)
+     -> user service --> place the order  
+                             |   (send the notifications below services)
+     -> restraunt service 
+     -> delivery service  
+     -> analytic service(admin). 
+
+===================================================================
+
+
+
+                            
+          
