@@ -1,0 +1,464 @@
+=====================================================================
+ KAFKA REAL EXAMPLE - MOVIE TICKET BOOKING WITH EMAIL NOTIFICATION
+ Spring Boot + Docker | 3 users, real logic, "why Kafka" demos
+=====================================================================
+
+ THE STORY (tell this to the class first):
+
+   A BookMyShow-style app. 3 registered users.
+   When a user books a ticket:
+     - the booking confirms INSTANTLY
+     - the email goes out SEPARATELY through Kafka
+     - email is SLOW (3 seconds) but booking is never slow
+     - email system dead? bookings still work, events wait in Kafka
+
+   THAT is the need for Kafka.
+
+ THE PICTURE:
+
+   Browser: /book?userId=1&movie=Avengers&seats=2
+        |
+        v
+   BookingController (PRODUCER)
+        |  replies INSTANTLY: "Booking CONFIRMED!"
+        |  drops event in Kafka, does NOT wait
+        v
+   [ KAFKA : topic "booking-events" ]
+        |
+        v
+   EmailConsumer (CONSUMER, group "email-group")
+        |  LOGIC: looks up WHO booked (userId -> name + email)
+        v
+   "EMAIL SENT to rahul@gmail.com >>> Hi Rahul, your booking ..."
+
+ NOTE: written for SPRING BOOT 4 (Jackson 3, import "tools.jackson",
+ NO throws needed for ObjectMapper). See the note in STEP 6.
+=====================================================================
+
+
+=====================================================================
+ STEP 1 : START KAFKA WITH DOCKER
+=====================================================================
+ (Already running from the hello-world demo? Check with "docker ps" -
+  if the kafka container says "Up", SKIP to STEP 2.)
+
+ 1. Create a folder:  kafka-hello
+ 2. Inside it, create file:  docker-compose.yml
+ 3. Paste:
+
+services:
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:19092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+ 4. Terminal, inside the folder:
+
+    docker compose up -d
+
+    EXPECTED OUTPUT:
+       [+] Running 2/2
+        - Container kafka   Started
+
+ 5. Verify:
+
+    docker ps
+
+    EXPECTED OUTPUT (important parts):
+       IMAGE                STATUS         NAMES
+       apache/kafka:3.7.0   Up 10 seconds  kafka
+
+
+=====================================================================
+ STEP 2 : CREATE THE SPRING BOOT PROJECT
+=====================================================================
+ Go to:  https://start.spring.io
+
+    Project      : Maven
+    Language     : Java
+    Group        : com.example
+    Artifact     : bookingdemo
+    Java         : 17 (or higher)
+    Dependencies : Spring Web
+                   Spring for Apache Kafka
+
+ GENERATE -> unzip -> IntelliJ -> File -> Open -> select the
+ "bookingdemo" folder (the one containing pom.xml).
+
+ !!! WAIT for the progress bar at the BOTTOM to finish completely
+     (Maven downloading). Creating files before it finishes causes
+     red "cannot resolve" errors.
+
+ VERIFY pom.xml contains BOTH:
+
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.kafka</groupId>
+        <artifactId>spring-kafka</artifactId>
+    </dependency>
+
+
+=====================================================================
+ STEP 3 : application.properties
+=====================================================================
+ Open src/main/resources/application.properties and paste:
+
+server.port=8081
+spring.kafka.bootstrap-servers=localhost:9092
+spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer
+spring.kafka.producer.value-serializer=org.apache.kafka.common.serialization.StringSerializer
+spring.kafka.consumer.group-id=email-group
+spring.kafka.consumer.auto-offset-reset=earliest
+spring.kafka.consumer.key-deserializer=org.apache.kafka.common.serialization.StringDeserializer
+spring.kafka.consumer.value-deserializer=org.apache.kafka.common.serialization.StringDeserializer
+
+ MEANING:
+  * port 8081                  -> our app's port
+  * bootstrap-servers          -> where Kafka lives (docker, 9092)
+  * String serializers         -> everything travels as plain text
+  * group-id: email-group      -> our consumer's team name
+  * auto-offset-reset earliest -> first run reads from the beginning
+
+ !!! If the old kafkademo (hello world) app is still RUNNING, stop
+     it - both apps use port 8081.
+
+
+=====================================================================
+ STEP 4 : CREATE THE PACKAGES
+=====================================================================
+ Right-click com.example.bookingdemo -> New -> Package, 3 times:
+    model
+    controller
+    consumer
+
+ TARGET STRUCTURE:
+
+    src/main/java/com/example/bookingdemo/
+     |-- BookingdemoApplication.java     <- already generated, DON'T touch
+     |-- model/
+     |     |-- BookingEvent.java         <- STEP 5
+     |-- controller/
+     |     |-- BookingController.java    <- STEP 6
+     |-- consumer/
+           |-- EmailConsumer.java        <- STEP 7
+
+ RULE: everything must be UNDER com.example.bookingdemo, otherwise
+ Spring silently ignores it.
+
+
+=====================================================================
+ STEP 5 : model/BookingEvent.java  (the event that travels)
+=====================================================================
+ Right-click "model" -> New -> Java Class -> BookingEvent
+
+package com.example.bookingdemo.model;
+
+public class BookingEvent {
+
+    private String bookingId;
+    private int userId;
+    private String movie;
+    private int seats;
+
+    public BookingEvent() { }    // empty constructor - ObjectMapper needs it
+
+    public String getBookingId() { return bookingId; }
+    public void setBookingId(String bookingId) { this.bookingId = bookingId; }
+    public int getUserId() { return userId; }
+    public void setUserId(int userId) { this.userId = userId; }
+    public String getMovie() { return movie; }
+    public void setMovie(String movie) { this.movie = movie; }
+    public int getSeats() { return seats; }
+    public void setSeats(int seats) { this.seats = seats; }
+}
+
+ EXPLANATION:
+  This is the "envelope" that travels through Kafka:
+  WHO booked (userId), WHAT movie, HOW MANY seats.
+  TIP: type the 4 fields, then Alt+Insert -> Getter and Setter.
+
+
+=====================================================================
+ STEP 6 : controller/BookingController.java  (THE PRODUCER)
+=====================================================================
+ Right-click "controller" -> New -> Java Class -> BookingController
+
+package com.example.bookingdemo.controller;
+
+import com.example.bookingdemo.model.BookingEvent;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+import tools.jackson.databind.ObjectMapper;
+
+import java.util.UUID;
+
+@RestController
+public class BookingController {
+
+    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final ObjectMapper objectMapper;
+
+    public BookingController(KafkaTemplate<String, String> kafkaTemplate,
+                             ObjectMapper objectMapper) {
+        this.kafkaTemplate = kafkaTemplate;
+        this.objectMapper = objectMapper;
+    }
+
+    // BOOK A TICKET (GET so we can demo from the browser)
+    // http://localhost:8081/book?userId=1&movie=Avengers&seats=2
+    @GetMapping("/book")
+    public String book(@RequestParam int userId,
+                       @RequestParam String movie,
+                       @RequestParam int seats) {
+
+        // 1. build the event
+        BookingEvent event = new BookingEvent();
+        event.setBookingId(UUID.randomUUID().toString().substring(0, 8));
+        event.setUserId(userId);
+        event.setMovie(movie);
+        event.setSeats(seats);
+
+        // 2. drop it in Kafka - we do NOT wait for the email!
+        String json = objectMapper.writeValueAsString(event);
+        kafkaTemplate.send("booking-events", json);
+
+        // 3. customer gets INSTANT confirmation
+        return "Booking CONFIRMED! id=" + event.getBookingId()
+                + " | " + movie + " | " + seats + " seat(s)";
+    }
+}
+
+ EXPLANATION:
+  * UUID...substring(0,8)  -> a short random booking id like "a1b2c3d4"
+  * writeValueAsString     -> BookingEvent object -> JSON text
+  * kafkaTemplate.send     -> drop in topic "booking-events", move on
+  * The method returns IMMEDIATELY - it never waits for the email.
+
+ !!! IMPORT NOTE (Spring Boot 4 / Jackson 3):
+     import tools.jackson.databind.ObjectMapper;   <- correct here
+     NO "throws JsonProcessingException" needed.
+     (Old tutorials use com.fasterxml.jackson + throws - that is
+      Jackson 2 / Spring Boot 3 style. Do not mix them.)
+
+
+=====================================================================
+ STEP 7 : consumer/EmailConsumer.java  (THE CONSUMER + LOGIC)
+=====================================================================
+ Right-click "consumer" -> New -> Java Class -> EmailConsumer
+
+package com.example.bookingdemo.consumer;
+
+import com.example.bookingdemo.model.BookingEvent;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.stereotype.Component;
+import tools.jackson.databind.ObjectMapper;
+
+import java.util.Map;
+
+@Component
+public class EmailConsumer {
+
+    private final ObjectMapper objectMapper;
+
+    // our 3 registered users (in real life: a database table)
+    private final Map<Integer, String[]> users = Map.of(
+            1, new String[]{"Rahul", "rahul@gmail.com"},
+            2, new String[]{"Priya", "priya@gmail.com"},
+            3, new String[]{"Amit",  "amit@gmail.com"}
+    );
+
+    public EmailConsumer(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
+
+    @KafkaListener(topics = "booking-events", groupId = "email-group")
+    public void sendEmail(String json) throws InterruptedException {
+
+        BookingEvent event = objectMapper.readValue(json, BookingEvent.class);
+
+        // LOGIC: find WHICH user made this booking
+        String[] user = users.get(event.getUserId());
+        if (user == null) {
+            System.out.println("!! Unknown user id: " + event.getUserId());
+            return;
+        }
+        String name  = user[0];
+        String email = user[1];
+
+        // pretend a real email takes 3 seconds
+        System.out.println("... preparing email for " + name + " ...");
+        Thread.sleep(3000);
+
+        System.out.println("EMAIL SENT to " + email
+                + " >>> Hi " + name + ", your booking " + event.getBookingId()
+                + " for '" + event.getMovie() + "' (" + event.getSeats()
+                + " seats) is CONFIRMED. Enjoy the movie!");
+    }
+}
+
+ EXPLANATION:
+  * users map            -> our tiny "user database": id -> {name, email}
+  * readValue            -> JSON text -> BookingEvent object
+  * users.get(userId)    -> THE LOGIC: find the right person to notify
+  * Thread.sleep(3000)   -> simulates a slow real email server
+  * throws InterruptedException is for Thread.sleep - KEEP it.
+  * @KafkaListener       -> Spring calls sendEmail() automatically
+                            for every message on "booking-events".
+
+
+=====================================================================
+ STEP 8 : RUN
+=====================================================================
+ Green Run arrow on BookingdemoApplication.
+
+ EXPECTED OUTPUT (console):
+    Tomcat started on port 8081
+    Started BookingdemoApplication in x.xxx seconds
+    email-group: partitions assigned: [booking-events-0]
+
+ "partitions assigned" = the email consumer is watching. Ready.
+
+
+=====================================================================
+ STEP 9 : DEMO 1 - THE RIGHT USER GETS THE RIGHT EMAIL
+=====================================================================
+ Browser:
+
+    http://localhost:8081/book?userId=1&movie=Avengers&seats=2
+
+ EXPECTED IN BROWSER (INSTANT):
+    Booking CONFIRMED! id=a1b2c3d4 | Avengers | 2 seat(s)
+
+ EXPECTED IN CONSOLE (3 seconds later):
+    ... preparing email for Rahul ...
+    EMAIL SENT to rahul@gmail.com >>> Hi Rahul, your booking a1b2c3d4
+    for 'Avengers' (2 seats) is CONFIRMED. Enjoy the movie!
+
+ Now book as the other users:
+
+    http://localhost:8081/book?userId=2&movie=Pushpa&seats=4
+    http://localhost:8081/book?userId=3&movie=Jawan&seats=1
+
+ EXPECTED IN CONSOLE:
+    EMAIL SENT to priya@gmail.com >>> Hi Priya, ... 'Pushpa' (4 seats) ...
+    EMAIL SENT to amit@gmail.com  >>> Hi Amit,  ... 'Jawan'  (1 seats) ...
+
+ TEACHING POINT:
+    The event carried the userId. The consumer used LOGIC (a lookup)
+    to notify the CORRECT person. User 1 booked -> user 1 got the mail.
+
+
+=====================================================================
+ STEP 10 : DEMO 2 - WHY KAFKA? (the money shot)
+=====================================================================
+ The email takes 3 SECONDS (Thread.sleep). But the booking reply
+ was INSTANT. Prove it - refresh this 3 times QUICKLY:
+
+    http://localhost:8081/book?userId=1&movie=Avengers&seats=1
+
+ EXPECTED:
+    Browser : instant, instant, instant   (3 confirmations, no waiting)
+    Console : the 3 emails come out one by one, every 3 seconds -
+              slow, but ALL of them arrive. None lost.
+
+ SAY TO THE CLASS:
+    "Without Kafka, every customer stares at a loading spinner for
+     3 seconds while we send their email. With Kafka, booking is
+     instant and emails flow out behind the scenes. And if the email
+     system DIES completely, bookings still work - the events just
+     WAIT in Kafka until it comes back."
+
+
+=====================================================================
+ STEP 11 : DEMO 3 - UNKNOWN USER (logic handles bad data)
+=====================================================================
+    http://localhost:8081/book?userId=99&movie=Avengers&seats=2
+
+ EXPECTED:
+    Browser : Booking CONFIRMED! ...        (producer doesn't care)
+    Console : !! Unknown user id: 99        (consumer's logic decided)
+
+ TEACHING POINT:
+    Producer and consumer are INDEPENDENT. The consumer contains the
+    business logic and decides what to do with each event - even bad
+    ones. No crash, no lost messages.
+
+
+=====================================================================
+ STEP 12 : BONUS - PEEK INSIDE KAFKA
+=====================================================================
+ See the actual JSON events stored in the topic (no Java needed):
+
+    docker exec -it kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic booking-events --from-beginning
+
+ EXPECTED OUTPUT:
+    {"bookingId":"a1b2c3d4","userId":1,"movie":"Avengers","seats":2}
+    {"bookingId":"b5c6d7e8","userId":2,"movie":"Pushpa","seats":4}
+    ...
+    (Ctrl+C to exit)
+
+
+=====================================================================
+ TROUBLESHOOTING
+=====================================================================
+
+ PROBLEM: red imports / cannot resolve
+ FIX    : Maven not loaded -> M refresh icon (top right), wait for
+          the bottom progress bar to finish.
+
+ PROBLEM: "Connection refused" on startup
+ FIX    : Kafka not running -> docker compose up -d ; docker ps.
+
+ PROBLEM: port 8081 already in use
+ FIX    : the old kafkademo (hello world) app is still running -
+          stop it, or change server.port here.
+
+ PROBLEM: booking works but no email line in console
+ FIX    : topic name must be "booking-events" in BOTH controller and
+          consumer - spelled EXACTLY the same.
+
+ PROBLEM: error on ObjectMapper / JsonProcessingException
+ FIX    : check the import. Spring Boot 4 = tools.jackson.databind.
+          ObjectMapper, NO throws. (com.fasterxml = old Jackson 2.)
+
+ PROBLEM: JSON fields come as null/0 in consumer
+ FIX    : BookingEvent must have the empty constructor and ALL
+          getters/setters (ObjectMapper uses them).
+
+
+=====================================================================
+ RECAP - WHAT THIS EXAMPLE TEACHES
+=====================================================================
+
+ 1. REAL FLOW      : booking event -> Kafka -> email notification.
+ 2. REAL LOGIC     : consumer looks up WHO booked and notifies the
+                     right person (userId -> name + email).
+ 3. WHY KAFKA #1   : producer replies INSTANTLY; slow work (email)
+                     happens in the background. Customers never wait.
+ 4. WHY KAFKA #2   : consumer slow or dead -> events WAIT in Kafka.
+                     Nothing is ever lost. Bookings never fail
+                     because of the email system.
+ 5. INDEPENDENCE   : producer doesn't know the consumer exists.
+                     Tomorrow add an SMS consumer with a new groupId -
+                     zero changes to the booking code.
+
+=====================================================================
+ END
+=====================================================================

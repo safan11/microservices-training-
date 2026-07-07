@@ -1,0 +1,373 @@
+=====================================================================
+ KAFKA SIMPLE REAL EXAMPLE - "CABAPP"
+ 1 Producer + 2 Consumers in ONE app | NO ObjectMapper needed
+=====================================================================
+
+ THE STORY 
+
+   You booked a cab. Two screens need the cab's location:
+     1. YOUR PHONE   : "Your cab is 5 km away... 3 km... ARRIVED!"
+     2. ADMIN OFFICE : dashboard counting/watching all cab updates
+
+   The cab sends its location ONCE. How do BOTH screens get it?
+   -> KAFKA. One producer, two consumers with DIFFERENT groupIds.
+      (Different groups = each team gets a full copy of every message.)
+
+ THE PICTURE:
+
+   Browser click: /cab?userId=1&km=5
+        |
+        v
+   CabController (PRODUCER)
+        |  sends plain text "1,5.0" to Kafka
+        v
+   [ KAFKA : topic "cab-topic" ]
+        |
+        |--> UserNotifier   (groupId "user-group")
+        |    "USER APP >>> Hi Rahul, your cab is 5.0 km away"
+        |
+        '--> AdminDashboard (groupId "admin-group")
+             "ADMIN    >>> update #1 | user 1 cab at 5.0 km"
+
+ SIMPLICITY NOTE - WHY NO ObjectMapper HERE:
+   ObjectMapper (JSON converter) is only needed when you send an
+   OBJECT through Kafka. For simplicity, in this example we send a
+   PLAIN TEXT message instead: the two values packed with a comma ->
+   "1,5.0". The consumers just split(",") to read them back.
+   Simple text = no model class, no JSON, no converter, no errors.
+   (Rule to remember: simple text -> no ObjectMapper;
+    real object with many fields -> use JSON + ObjectMapper.)
+
+ YOU IS THE CAB: each browser click moves the cab closer.
+ No threads, no loops, no timers - full control, easy to demo.
+=====================================================================
+
+
+=====================================================================
+ STEP 1 : KAFKA RUNNING? (Docker)
+=====================================================================
+ Terminal:
+
+    docker ps
+
+ EXPECTED OUTPUT:
+    apache/kafka:3.7.0   Up xx minutes   kafka
+
+ If NOT running, go to your kafka-hello folder and:
+
+    docker compose up -d
+
+ (The docker-compose.yml is the same one from the hello-world guide:
+  kafka-helloworld-complete-steps.txt, LEVEL 0.)
+
+
+=====================================================================
+ STEP 2 : CREATE THE PROJECT
+=====================================================================
+ Go to https://start.spring.io :
+
+    Project      : Maven
+    Language     : Java
+    Group        : com.example
+    Artifact     : cabapp
+    Java         : 17 (or higher)
+    Dependencies : Spring Web
+                   Spring for Apache Kafka
+
+ GENERATE -> unzip -> IntelliJ -> File -> Open -> "cabapp" folder
+ (the one containing pom.xml).
+
+ !!! WAIT for the progress bar at the BOTTOM to finish (Maven
+     downloading) before creating any file.
+
+ !!! STOP your old apps (kafkademo / bookingdemo) - this app also
+     uses port 8081.
+
+
+=====================================================================
+ STEP 3 : application.properties
+=====================================================================
+ Open src/main/resources/application.properties and paste:
+
+server.port=8081
+spring.kafka.bootstrap-servers=localhost:9092
+spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer
+spring.kafka.producer.value-serializer=org.apache.kafka.common.serialization.StringSerializer
+spring.kafka.consumer.auto-offset-reset=earliest
+spring.kafka.consumer.key-deserializer=org.apache.kafka.common.serialization.StringDeserializer
+spring.kafka.consumer.value-deserializer=org.apache.kafka.common.serialization.StringDeserializer
+
+ MEANING:
+  * bootstrap-servers      -> where Kafka is (docker, port 9092)
+  * String (de)serializers -> messages travel as plain text
+  * NOTE: no group-id line here! Each listener declares its OWN
+    groupId in the code (because our two consumers need DIFFERENT
+    groups).
+
+
+=====================================================================
+ STEP 4 : CREATE THE PACKAGES
+=====================================================================
+ Right-click com.example.cabapp -> New -> Package:
+    controller
+    consumer
+
+ TARGET STRUCTURE (only 3 files to write!):
+
+    src/main/java/com/example/cabapp/
+     |-- CabappApplication.java       <- generated, DON'T touch
+     |-- controller/
+     |     |-- CabController.java     <- STEP 5
+     |-- consumer/
+           |-- UserNotifier.java      <- STEP 6
+           |-- AdminDashboard.java    <- STEP 7
+
+ (No model package. No ObjectMapper. That's the simplicity.)
+
+
+=====================================================================
+ STEP 5 : controller/CabController.java  (THE PRODUCER)
+=====================================================================
+ Right-click "controller" -> New -> Java Class -> CabController
+
+package com.example.cabapp.controller;
+
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class CabController {
+
+    private final KafkaTemplate<String, String> kafkaTemplate;
+
+    public CabController(KafkaTemplate<String, String> kafkaTemplate) {
+        this.kafkaTemplate = kafkaTemplate;
+    }
+
+    // http://localhost:8081/cab?userId=1&km=5
+    @GetMapping("/cab")
+    public String cab(@RequestParam int userId, @RequestParam double km) {
+
+        String message = userId + "," + km;      // just text: "1,5.0"
+        kafkaTemplate.send("cab-topic", message);
+
+        return "Location sent: cab is " + km + " km from user " + userId;
+    }
+}
+
+ EXPLANATION:
+  * The whole message is plain text: userId + "," + km -> "1,5.0"
+    For simplicity we pack the two values with a comma, instead of
+    converting an object to JSON with ObjectMapper.
+  * kafkaTemplate.send(topic, message) -> drop it in Kafka, done.
+  * @GetMapping -> we can demo from the browser, no Postman needed.
+
+
+=====================================================================
+ STEP 6 : consumer/UserNotifier.java  (CONSUMER 1 - the user's phone)
+=====================================================================
+ Right-click "consumer" -> New -> Java Class -> UserNotifier
+
+package com.example.cabapp.consumer;
+
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.stereotype.Component;
+
+import java.util.Map;
+
+@Component
+public class UserNotifier {
+
+    // our registered users: id -> name (in real life: a database)
+    private final Map<Integer, String> users = Map.of(
+            1, "Rahul",
+            2, "Priya",
+            3, "Amit");
+
+    @KafkaListener(topics = "cab-topic", groupId = "user-group")
+    public void notifyUser(String message) {
+
+        // message looks like "1,5.0" -> split at the comma
+        String[] parts = message.split(",");
+        int userId = Integer.parseInt(parts[0]);
+        double km  = Double.parseDouble(parts[1]);
+
+        String name = users.get(userId);
+
+        if (km == 0) {
+            System.out.println("USER APP >>> Hi " + name + ", your cab has ARRIVED!");
+        } else {
+            System.out.println("USER APP >>> Hi " + name + ", your cab is " + km + " km away");
+        }
+    }
+}
+
+ EXPLANATION:
+  * split(",")  -> "1,5.0" becomes ["1", "5.0"] - our two values back
+  * LOGIC 1: users.get(userId) -> finds WHO to notify (Rahul, not
+    Priya!) - the message goes to the RIGHT person
+  * LOGIC 2: km == 0 -> different message ("ARRIVED!") - the
+    consumer decides based on the data
+
+
+=====================================================================
+ STEP 7 : consumer/AdminDashboard.java  (CONSUMER 2 - office screen)
+=====================================================================
+ Right-click "consumer" -> New -> Java Class -> AdminDashboard
+
+package com.example.cabapp.consumer;
+
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.stereotype.Component;
+
+@Component
+public class AdminDashboard {
+
+    private int totalUpdates = 0;    // the dashboard's counter
+
+    @KafkaListener(topics = "cab-topic", groupId = "admin-group")
+    public void update(String message) {
+
+        String[] parts = message.split(",");
+        int userId = Integer.parseInt(parts[0]);
+        double km  = Double.parseDouble(parts[1]);
+
+        totalUpdates++;
+
+        System.out.println("ADMIN    >>> update #" + totalUpdates
+                + " | user " + userId + " cab at " + km + " km");
+    }
+}
+
+ EXPLANATION:
+  * totalUpdates++ -> the dashboard keeps its own STATE (a counter
+    that grows with every event) - mini version of a real dashboard.
+
+ !!! THE MOST IMPORTANT LINE OF THIS WHOLE EXAMPLE:
+     UserNotifier   : groupId = "user-group"
+     AdminDashboard : groupId = "admin-group"
+     DIFFERENT groupIds -> each consumer gets EVERY message (a full
+     copy each). If both had the SAME groupId, they would SHARE the
+     messages and each update would print only ONE line, not two.
+
+
+=====================================================================
+ STEP 8 : RUN
+=====================================================================
+ Green Run arrow on CabappApplication.
+
+ EXPECTED OUTPUT (console):
+    Tomcat started on port 8081
+    Started CabappApplication in x.xxx seconds
+    user-group: partitions assigned: [cab-topic-0]
+    admin-group: partitions assigned: [cab-topic-0]
+
+ BOTH groups say "partitions assigned" = both consumers are watching.
+
+
+=====================================================================
+ STEP 9 : DRIVE THE CAB! (the demo)
+=====================================================================
+ You are the cab. Each browser click moves it closer. Click one by
+ one:
+
+    http://localhost:8081/cab?userId=1&km=5
+    http://localhost:8081/cab?userId=1&km=3
+    http://localhost:8081/cab?userId=1&km=1
+    http://localhost:8081/cab?userId=1&km=0
+
+ EXPECTED IN BROWSER (each click, instant):
+    Location sent: cab is 5.0 km from user 1     (etc.)
+
+ EXPECTED IN CONSOLE (after all 4 clicks):
+    USER APP >>> Hi Rahul, your cab is 5.0 km away
+    ADMIN    >>> update #1 | user 1 cab at 5.0 km
+    USER APP >>> Hi Rahul, your cab is 3.0 km away
+    ADMIN    >>> update #2 | user 1 cab at 3.0 km
+    USER APP >>> Hi Rahul, your cab is 1.0 km away
+    ADMIN    >>> update #3 | user 1 cab at 1.0 km
+    USER APP >>> Hi Rahul, your cab has ARRIVED!
+    ADMIN    >>> update #4 | user 1 cab at 0.0 km
+
+ LOOK: every click = ONE message sent = TWO lines printed.
+ One producer, two consumers - both got every event.
+
+ Try another user:
+    http://localhost:8081/cab?userId=2&km=4
+
+ EXPECTED:
+    USER APP >>> Hi Priya, your cab is 4.0 km away
+    ADMIN    >>> update #5 | user 2 cab at 4.0 km
+
+ (Right person notified - the LOGIC found Priya from userId=2.)
+
+
+=====================================================================
+ STEP 10 : ONE-MINUTE EXPERIMENT - PROVE THE groupId RULE
+=====================================================================
+ 1. In AdminDashboard.java change:
+       groupId = "admin-group"   -->   groupId = "user-group"
+    (now BOTH consumers have the SAME group)
+ 2. Restart, click:  http://localhost:8081/cab?userId=1&km=2
+
+ EXPECTED: only ONE line prints (either USER APP or ADMIN - never
+ both). Same group = consumers SHARE the messages.
+
+ 3. Change it back to "admin-group", restart, click again.
+
+ EXPECTED: TWO lines print again. Different groups = full copy each.
+
+ MEMORY TRICK:
+    "Same team -> divide the letters.
+     Different teams -> photocopy for each."
+
+
+=====================================================================
+ TROUBLESHOOTING
+=====================================================================
+
+ PROBLEM: red imports / cannot resolve
+ FIX    : Maven not loaded -> M refresh icon (top right), wait for
+          the bottom progress bar.
+
+ PROBLEM: "Connection refused" on startup
+ FIX    : Kafka not running -> docker compose up -d ; docker ps.
+
+ PROBLEM: port 8081 already in use
+ FIX    : old kafkademo/bookingdemo app still running - stop it.
+
+ PROBLEM: browser works but console silent
+ FIX    : topic must be "cab-topic" in ALL THREE files - spelled
+          exactly the same.
+
+ PROBLEM: only one line prints instead of two
+ FIX    : the two groupIds must be DIFFERENT:
+          user-group / admin-group. Check for typos.
+
+ PROBLEM: NumberFormatException in consumer
+ FIX    : the message must be "userId,km" - check the controller
+          builds it as: userId + "," + km
+
+
+=====================================================================
+ RECAP - WHAT THIS EXAMPLE TEACHES
+=====================================================================
+
+ 1. ONE producer, TWO consumers: the cab reports ONCE, both the
+    user's phone and the admin dashboard receive it.
+ 2. DIFFERENT groupId = each consumer gets EVERY message.
+    SAME groupId = they share. (Step 10 proves it live.)
+ 3. Consumers hold LOGIC: lookup the right user, decide the message
+    (away vs ARRIVED), count updates (dashboard state).
+ 4. For SIMPLICITY we sent plain text "userId,km" and split(",") -
+    so no ObjectMapper needed. ObjectMapper/JSON is only required
+    when sending real OBJECTS with many fields.
+ 5. Loose coupling: the controller doesn't know the consumers exist.
+    Add a 3rd consumer tomorrow (SMS? billing?) with a new groupId -
+    zero changes to existing code.
+
+=====================================================================
+ END
+=====================================================================

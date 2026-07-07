@@ -1,0 +1,603 @@
+=====================================================================
+ COMPLETE STEP BY STEP GUIDE
+ Spring Boot + Docker | String message + JSON message
+=====================================================================
+ What you build:
+
+   Browser/Postman --> CONTROLLER --> [KAFKA in Docker] --> CONSUMER --> console
+                       (producer)                           (listener)
+
+ LEVEL 0 : Start Kafka with Docker
+ LEVEL 1 : Hello World - send a String, receive it   (basic output)
+ LEVEL 2 : Send a JSON message (Order object)
+ LEVEL 3 : The groupId experiment (understand consumer groups)
+
+ IMPORTANT: This guide is written for SPRING BOOT 4 (Jackson 3,
+ package "tools.jackson", NO throws needed). See Section 9 note.
+=====================================================================
+
+
+=====================================================================
+ LEVEL 0 : START KAFKA WITH DOCKER
+=====================================================================
+
+---------------------------------------------------------------------
+ STEP 0.1 - Check Docker is installed and running
+---------------------------------------------------------------------
+ Open a terminal (CMD/PowerShell) and type:
+
+    docker --version
+
+ EXPECTED OUTPUT:
+    Docker version 27.x.x, build xxxxxxx
+
+ (If not installed: install Docker Desktop, start it, wait for the
+  whale icon to become steady.)
+
+---------------------------------------------------------------------
+ STEP 0.2 - Create the docker-compose file
+---------------------------------------------------------------------
+ 1. Create a folder anywhere, name it:  kafka-hello
+ 2. Inside it create a file named exactly:  docker-compose.yml
+ 3. Paste this content:
+
+services:
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:19092,CONTROLLER://0.0.0.0:9093,PLAINTEXT_HOST://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:19092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+ WHAT THE IMPORTANT LINES MEAN (simple words):
+  * image: apache/kafka:3.7.0   -> which software: official Kafka
+  * ports "9092:9092"           -> open door 9092 for our app
+  * PROCESS_ROLES broker,controller
+        -> KRaft mode: Kafka manages itself, NO ZooKeeper needed
+  * KAFKA_LISTENERS             -> which doors Kafka opens:
+        19092 = for containers inside docker
+        9093  = Kafka internal management
+        9092  = for OUR Spring Boot app (localhost)
+  * ADVERTISED_LISTENERS        -> the address printed on the
+        "visiting card": our app knocks at localhost:9092
+  * AUTO_CREATE_TOPICS "true"   -> topics are created automatically
+        the first time a message is sent (no manual creation)
+
+---------------------------------------------------------------------
+ STEP 0.3 - Start Kafka
+---------------------------------------------------------------------
+ In the terminal, inside the kafka-hello folder:
+
+    docker compose up -d
+
+ EXPECTED OUTPUT:
+    [+] Running 2/2
+     - Network kafka-hello_default  Created
+     - Container kafka              Started
+
+---------------------------------------------------------------------
+ STEP 0.4 - Verify Kafka is running
+---------------------------------------------------------------------
+    docker ps
+
+ EXPECTED OUTPUT (one line, the important parts):
+    IMAGE                STATUS          NAMES
+    apache/kafka:3.7.0   Up 10 seconds   kafka
+
+ STATUS must say "Up". Kafka is ready. Leave it running.
+ (You never touch Docker again until shutdown.)
+
+
+=====================================================================
+ LEVEL 1 : HELLO WORLD - STRING MESSAGE
+=====================================================================
+
+---------------------------------------------------------------------
+ STEP 1.1 - Create the Spring Boot project
+---------------------------------------------------------------------
+ Go to:  https://start.spring.io
+
+    Project      : Maven
+    Language     : Java
+    Group        : com.example
+    Artifact     : kafkademo        (one word, no hyphens)
+    Java         : 17 (or higher)
+    Dependencies : Spring Web
+                   Spring for Apache Kafka
+
+ Click GENERATE -> a zip downloads -> unzip it.
+
+---------------------------------------------------------------------
+ STEP 1.2 - Open in IntelliJ
+---------------------------------------------------------------------
+ IntelliJ -> File -> Open -> select the "kafkademo" folder
+ (the folder that contains pom.xml).
+
+ !!! WAIT for the progress bar at the BOTTOM to finish completely.
+     That is Maven downloading the libraries. Do NOT create any file
+     before it finishes (otherwise: red "cannot resolve" errors).
+
+ VERIFY: open pom.xml, you must see BOTH dependencies:
+
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.springframework.kafka</groupId>
+        <artifactId>spring-kafka</artifactId>
+    </dependency>
+
+ If spring-kafka is missing: add it manually, then right-click
+ pom.xml -> Maven -> Reload Project.
+
+---------------------------------------------------------------------
+ STEP 1.3 - application.properties
+---------------------------------------------------------------------
+ Open:  src/main/resources/application.properties
+ Paste:
+
+server.port=8081
+spring.kafka.bootstrap-servers=localhost:9092
+spring.kafka.producer.key-serializer=org.apache.kafka.common.serialization.StringSerializer
+spring.kafka.producer.value-serializer=org.apache.kafka.common.serialization.StringSerializer
+spring.kafka.consumer.group-id=hello-group
+spring.kafka.consumer.auto-offset-reset=earliest
+spring.kafka.consumer.key-deserializer=org.apache.kafka.common.serialization.StringDeserializer
+spring.kafka.consumer.value-deserializer=org.apache.kafka.common.serialization.StringDeserializer
+
+ MEANING (line by line):
+  * server.port=8081          -> our app runs on port 8081
+  * bootstrap-servers         -> WHERE Kafka is (the docker door)
+  * serializer (producer)     -> convert data to bytes when SENDING;
+                                 String = everything travels as text
+  * group-id                  -> our consumer's team name
+  * auto-offset-reset=earliest-> first run: read topic from beginning
+  * deserializer (consumer)   -> convert bytes back to text on READ
+
+---------------------------------------------------------------------
+ STEP 1.4 - Create the packages
+---------------------------------------------------------------------
+ In the Project panel:
+ right-click com.example.kafkademo -> New -> Package -> "controller"
+ right-click com.example.kafkademo -> New -> Package -> "consumer"
+
+ TARGET STRUCTURE:
+
+    src/main/java/com/example/kafkademo/
+     |-- KafkademoApplication.java      <- already generated, DON'T touch
+     |-- controller/
+     |     |-- KafkaController.java     <- create in STEP 1.5
+     |-- consumer/
+           |-- KafkaConsumer.java       <- create in STEP 1.6
+
+ RULE: everything must be UNDER com.example.kafkademo.
+ A class outside it is silently IGNORED by Spring (no error shown,
+ things just "don't work").
+
+---------------------------------------------------------------------
+ STEP 1.5 - The PRODUCER (KafkaController.java)
+---------------------------------------------------------------------
+ Right-click "controller" package -> New -> Java Class -> KafkaController
+
+package com.example.kafkademo.controller;
+
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestParam;
+import org.springframework.web.bind.annotation.RestController;
+
+@RestController
+public class KafkaController {
+
+    private final KafkaTemplate<String, String> kafkaTemplate;
+
+    public KafkaController(KafkaTemplate<String, String> kafkaTemplate) {
+        this.kafkaTemplate = kafkaTemplate;
+    }
+
+    // PRODUCER : browser -> http://localhost:8081/send?msg=hello
+    @GetMapping("/send")
+    public String send(@RequestParam String msg) {
+        kafkaTemplate.send("hello-topic", msg);
+        return "Sent: " + msg;
+    }
+}
+
+ EXPLANATION:
+  * KafkaTemplate<String,String> = Spring's ready-made sender.
+    <key type, value type>. Spring creates it from our properties.
+  * The ENTIRE producer is one line:
+        kafkaTemplate.send(topic, message)
+  * We use @GetMapping so we can test from the BROWSER (no Postman
+    needed for level 1).
+
+---------------------------------------------------------------------
+ STEP 1.6 - The CONSUMER (KafkaConsumer.java)
+---------------------------------------------------------------------
+ Right-click "consumer" package -> New -> Java Class -> KafkaConsumer
+
+package com.example.kafkademo.consumer;
+
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.stereotype.Component;
+
+@Component
+public class KafkaConsumer {
+
+    // Spring calls this AUTOMATICALLY for every message on hello-topic
+    @KafkaListener(topics = "hello-topic", groupId = "hello-group")
+    public void listen(String msg) {
+        System.out.println("RECEIVED >>> " + msg);
+    }
+}
+
+ EXPLANATION:
+  * @Component        = "Spring, manage this class"
+  * @KafkaListener    = "watch this topic; when a message arrives,
+                         call my method". Nobody calls listen() in
+                         our code - Spring does it.
+  * topics  = WHICH mailbox to watch (must match the producer EXACTLY)
+  * groupId = WHO is reading (the team name - see LEVEL 3)
+
+---------------------------------------------------------------------
+ STEP 1.7 - Run the app
+---------------------------------------------------------------------
+ Click the green Run arrow on KafkademoApplication.
+
+ EXPECTED OUTPUT (end of the console):
+    Tomcat started on port 8081
+    Started KafkademoApplication in x.xxx seconds
+
+ And a line like:
+    hello-group: partitions assigned: [hello-topic-0]
+
+ "partitions assigned" = the consumer joined and is now watching.
+
+---------------------------------------------------------------------
+ STEP 1.8 - TEST in the browser
+---------------------------------------------------------------------
+ Open in your browser:
+
+    http://localhost:8081/send?msg=hello
+
+ EXPECTED IN BROWSER:
+    Sent: hello
+
+ EXPECTED IN INTELLIJ CONSOLE (within a second):
+    RECEIVED >>> hello
+
+ Try another one:
+    http://localhost:8081/send?msg=kafka is working
+
+    RECEIVED >>> kafka is working
+
+ *** LEVEL 1 COMPLETE ***
+ What happened:
+    Browser -> Controller -> kafkaTemplate.send() -> KAFKA
+            -> @KafkaListener -> console print
+
+
+=====================================================================
+ LEVEL 2 : JSON MESSAGE (Order object)
+=====================================================================
+ Goal: send a real OBJECT, not just text.
+
+ PROBLEM: our Kafka pipe carries only TEXT (StringSerializer).
+          An Order object cannot walk through a text pipe.
+ SOLUTION: ObjectMapper = the TRANSLATOR at the border.
+    - sending  : Order object --> JSON text     (writeValueAsString)
+    - receiving: JSON text    --> Order object  (readValue)
+
+---------------------------------------------------------------------
+ STEP 2.1 - Create the model package + Order class
+---------------------------------------------------------------------
+ Right-click com.example.kafkademo -> New -> Package -> "model"
+ Inside it -> New -> Java Class -> Order
+
+package com.example.kafkademo.model;
+
+public class Order {
+
+    private String orderId;
+    private String product;
+    private int quantity;
+
+    public Order() { }     // empty constructor - ObjectMapper NEEDS it
+
+    public String getOrderId() { return orderId; }
+    public void setOrderId(String orderId) { this.orderId = orderId; }
+    public String getProduct() { return product; }
+    public void setProduct(String product) { this.product = product; }
+    public int getQuantity() { return quantity; }
+    public void setQuantity(int quantity) { this.quantity = quantity; }
+}
+
+ TIP: type the 3 fields, then Alt+Insert -> Getter and Setter.
+ NOTE: ObjectMapper uses the empty constructor + getters/setters to
+       convert. Remove them and the conversion breaks.
+
+---------------------------------------------------------------------
+ STEP 2.2 - Update the CONTROLLER (full final file)
+---------------------------------------------------------------------
+ Replace the whole KafkaController.java content with:
+
+package com.example.kafkademo.controller;
+
+import com.example.kafkademo.model.Order;
+import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.web.bind.annotation.*;
+import tools.jackson.databind.ObjectMapper;
+
+@RestController
+public class KafkaController {
+
+    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final ObjectMapper objectMapper;
+
+    public KafkaController(KafkaTemplate<String, String> kafkaTemplate,
+                           ObjectMapper objectMapper) {
+        this.kafkaTemplate = kafkaTemplate;
+        this.objectMapper = objectMapper;
+    }
+
+    // STRING PRODUCER : browser -> http://localhost:8081/send?msg=hello
+    @GetMapping("/send")
+    public String send(@RequestParam String msg) {
+        kafkaTemplate.send("hello-topic", msg);
+        return "Sent: " + msg;
+    }
+
+    // JSON PRODUCER : POST http://localhost:8081/sendOrder
+    @PostMapping("/sendOrder")
+    public String sendOrder(@RequestBody Order order) {
+        String json = objectMapper.writeValueAsString(order);  // object -> JSON text
+        kafkaTemplate.send("order-topic", json);
+        return "Sent order: " + order.getOrderId();
+    }
+}
+
+ EXPLANATION:
+  * ObjectMapper is injected by the constructor - Spring provides it
+    ready-made (it comes with spring-boot-starter-web).
+  * writeValueAsString(order) turns
+        Order{ORD-1, Laptop, 2}
+    into the text
+        {"orderId":"ORD-1","product":"Laptop","quantity":2}
+  * That text is sent to a SECOND topic: "order-topic".
+  * IMPORT NOTE: the import is  tools.jackson.databind.ObjectMapper
+    (Spring Boot 4 / Jackson 3). See Section 9!
+
+---------------------------------------------------------------------
+ STEP 2.3 - Update the CONSUMER (full final file)
+---------------------------------------------------------------------
+ Replace the whole KafkaConsumer.java content with:
+
+package com.example.kafkademo.consumer;
+
+import com.example.kafkademo.model.Order;
+import org.springframework.kafka.annotation.KafkaListener;
+import org.springframework.stereotype.Component;
+import tools.jackson.databind.ObjectMapper;
+
+@Component
+public class KafkaConsumer {
+
+    private final ObjectMapper objectMapper;
+
+    public KafkaConsumer(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
+
+    // STRING CONSUMER
+    @KafkaListener(topics = "hello-topic", groupId = "hello-group")
+    public void listen(String msg) {
+        System.out.println("RECEIVED >>> " + msg);
+    }
+
+    // JSON CONSUMER
+    @KafkaListener(topics = "order-topic", groupId = "hello-group")
+    public void listenOrder(String json) {
+        Order order = objectMapper.readValue(json, Order.class);  // JSON text -> object
+        System.out.println("RECEIVED ORDER >>> id=" + order.getOrderId()
+                + ", product=" + order.getProduct()
+                + ", qty=" + order.getQuantity());
+    }
+}
+
+ EXPLANATION:
+  * Two listeners in one class - one per topic. Totally normal.
+  * readValue(json, Order.class) rebuilds a REAL Order object,
+    so we can use order.getProduct() etc.
+
+---------------------------------------------------------------------
+ STEP 2.4 - Restart and TEST with Postman
+---------------------------------------------------------------------
+ Stop the app (red square), Run again.
+
+ In Postman:
+    Method : POST
+    URL    : http://localhost:8081/sendOrder
+    Body   : select raw -> JSON, paste:
+
+    { "orderId": "ORD-1", "product": "Laptop", "quantity": 2 }
+
+ Click Send.
+
+ EXPECTED POSTMAN RESPONSE:
+    Sent order: ORD-1
+
+ EXPECTED IN INTELLIJ CONSOLE:
+    RECEIVED ORDER >>> id=ORD-1, product=Laptop, qty=2
+
+ *** LEVEL 2 COMPLETE ***
+ The round trip:
+    Order object -> JSON text -> KAFKA -> JSON text -> Order object
+
+
+=====================================================================
+ LEVEL 3 : THE groupId EXPERIMENT (consumer groups)
+=====================================================================
+ First, understand the line:
+
+    @KafkaListener(topics = "hello-topic", groupId = "hello-group")
+
+    topics  = WHICH mailbox to watch
+    groupId = the reader's TEAM NAME
+
+ WHY does Kafka need a groupId?
+    Kafka does NOT delete messages when read - they stay for days.
+    Many readers read the same topic, so Kafka must remember for
+    EACH reader separately: "you have read up to message X"
+    (the bookmark). groupId = the NAME on the bookmark.
+
+ THE TWO RULES:
+    SAME group      -> consumers SHARE the messages (divide work)
+    DIFFERENT group -> each group gets a FULL COPY of every message
+
+ Memory trick:
+    "Same team -> divide the letters.
+     Different teams -> photocopy for each."
+
+---------------------------------------------------------------------
+ STEP 3.1 - The experiment (5 minutes, no new files)
+---------------------------------------------------------------------
+ 1. In KafkaConsumer.java, COPY the listen() method and paste it
+    below with a DIFFERENT group id:
+
+    @KafkaListener(topics = "hello-topic", groupId = "hello-group2")
+    public void listen2(String msg) {
+        System.out.println("RECEIVED (group2) >>> " + msg);
+    }
+
+ 2. Restart the app. Send from browser:
+       http://localhost:8081/send?msg=test
+
+    EXPECTED OUTPUT - BOTH lines print (different groups = copy!):
+       RECEIVED >>> test
+       RECEIVED (group2) >>> test
+
+ 3. Now change "hello-group2" to "hello-group" (SAME group),
+    restart, send again.
+
+    EXPECTED OUTPUT - only ONE line prints (same group = share!):
+       RECEIVED >>> test
+             (or the group2 line - one of them, never both)
+
+ 4. Delete the extra method when done.
+
+ *** LEVEL 3 COMPLETE ***
+ You have now SEEN both consumer-group rules with your own eyes.
+
+
+=====================================================================
+ SECTION 8 : USEFUL COMMANDS
+=====================================================================
+
+ See the topics that were auto-created:
+    docker exec -it kafka /opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list
+
+ EXPECTED OUTPUT:
+    hello-topic
+    order-topic
+
+ Peek at raw messages inside a topic (no Java needed):
+    docker exec -it kafka /opt/kafka/bin/kafka-console-consumer.sh --bootstrap-server localhost:9092 --topic order-topic --from-beginning
+
+ EXPECTED OUTPUT:
+    {"orderId":"ORD-1","product":"Laptop","quantity":2}
+    (Ctrl+C to exit)
+
+ Stop everything at the end of the day:
+    docker compose down          (keeps data)
+    docker compose down -v       (fresh start next time)
+
+
+=====================================================================
+ SECTION 9 : IMPORTANT - JACKSON 2 vs JACKSON 3 (read this!)
+=====================================================================
+ Spring Boot 3  -> Jackson 2 -> import com.fasterxml.jackson.databind.ObjectMapper
+                              -> methods throw CHECKED exceptions
+                              -> you MUST write: throws JsonProcessingException
+
+ Spring Boot 4  -> Jackson 3 -> import tools.jackson.databind.ObjectMapper
+                              -> exceptions are UNCHECKED
+                              -> NO throws needed  (this guide!)
+
+ WHY IT MATTERS: most tutorials online are written for Jackson 2.
+ If you copy code and it complains about JsonProcessingException or
+ "cannot resolve", check WHICH package your ObjectMapper import uses:
+    com.fasterxml.jackson...  = old style, needs throws
+    tools.jackson...          = new style, no throws
+
+
+=====================================================================
+ SECTION 10 : TROUBLESHOOTING
+=====================================================================
+
+ PROBLEM: red imports / "cannot resolve symbol"
+ FIX    : Maven not loaded. Click the M refresh icon (top right),
+          wait for the bottom progress bar. Still red? File ->
+          Invalidate Caches -> Invalidate and Restart.
+
+ PROBLEM: "Connection refused" / "Broker may not be available"
+ FIX    : Kafka not running. docker compose up -d ; check docker ps.
+
+ PROBLEM: browser works but no RECEIVED line in console
+ FIX    : topic name in producer and consumer must match EXACTLY
+          (hello-topic vs hello_topic = different topics!).
+
+ PROBLEM: port 8081 already in use
+ FIX    : change server.port in application.properties.
+
+ PROBLEM: whole project red, even String
+ FIX    : File -> Project Structure -> SDK -> select JDK 17+.
+
+ PROBLEM: JSON error when testing /sendOrder
+ FIX    : Postman body field names must match Order fields exactly
+          (orderId, product, quantity). Body type = raw -> JSON.
+
+ PROBLEM: "variable might not have been initialized" on final fields
+ FIX    : the constructor is missing or its name doesn't match the
+          class name exactly. final fields MUST be set in constructor.
+
+
+=====================================================================
+ RECAP - THE WHOLE PICTURE
+=====================================================================
+
+  Browser/Postman
+        |
+        v
+  KafkaController  (PRODUCER)
+        |  kafkaTemplate.send(topic, message)      <- 1 line
+        v
+  [ KAFKA in Docker, localhost:9092 ]
+        |  message stored in topic (kept ~7 days, NOT deleted on read)
+        v
+  KafkaConsumer  (CONSUMER)
+        |  @KafkaListener calls the method automatically
+        v
+  console output
+
+  KEY POINTS:
+   1. Producer = KafkaTemplate.send()  - one line.
+   2. Consumer = @KafkaListener method - Spring calls it for you.
+   3. topics must MATCH between producer and consumer.
+   4. groupId: same = share the work, different = everyone gets a copy.
+   5. Objects travel as JSON text; ObjectMapper converts both ways.
+   6. Consumer down? Messages WAIT in Kafka. Nothing is lost.
+
+=====================================================================
+ END
+=====================================================================
