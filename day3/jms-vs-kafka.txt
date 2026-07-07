@@ -1,0 +1,281 @@
+I have formatted the comparison as a plain text document below. You can copy it into a file such as `kafka_vs_jms.txt`.
+
+```text
+Kafka vs JMS - Comparison
+
+==================================================
+Overview
+==================================================
+
+Kafka and JMS are both messaging technologies, but they are designed for
+different purposes.
+
+JMS (Java Message Service) is a messaging API specification used mainly for
+enterprise application communication.
+
+Kafka is a distributed event streaming platform designed for high-throughput,
+scalable, and replayable event processing.
+
+
+==================================================
+High-Level Differences
+==================================================
+
+Feature                 JMS                         Kafka
+---------------------------------------------------------------
+Type                    Messaging API               Event streaming platform
+
+Main purpose            Application messaging       Event streaming and data pipelines
+
+Message storage         Broker manages messages     Messages stored as logs
+
+Message removal         Removed after consumption   Retained based on policy
+
+Consumer model          Message delivery model      Offset-based consumption
+
+Replay messages         Usually not supported       Built-in replay support
+
+Ordering                Queue/session based         Guaranteed within partition
+
+Scalability             Good                        Designed for massive scale
+
+Throughput              Moderate to high            Extremely high
+
+Consumers               Usually one consumer        Multiple consumer groups
+
+==================================================
+JMS Message Model
+==================================================
+
+JMS follows a traditional message queue model.
+
+Producer
+   |
+   v
++---------+
+| Queue   |
++---------+
+   |
+   v
+Consumer
+
+
+Flow:
+
+1. Producer sends a message.
+2. JMS broker stores the message.
+3. Consumer receives the message.
+4. Consumer acknowledges the message.
+5. Broker removes the message.
+
+
+Example:
+
+Message-1
+Message-2
+Message-3
+
+Consumer reads Message-1
+
+Message-1 is removed after successful processing.
+
+
+==================================================
+Kafka Message Model
+==================================================
+
+Kafka stores messages as an append-only log.
+
+Example:
+
+Topic: orders
+
+Offset     Message
+---------------------
+0          Order-A
+1          Order-B
+2          Order-C
+3          Order-D
+
+
+Consumers do not remove messages.
+
+Instead, Kafka tracks the consumer position using offsets.
+
+
+Example:
+
+Consumer A:
+
+0 -> 1 -> 2
+
+
+Consumer B:
+
+0 -> 1 -> 2 -> 3
+
+
+Both consumers can read the same messages independently.
+
+
+==================================================
+Message Replay Difference
+==================================================
+
+JMS:
+
+Message received and acknowledged:
+
+Message
+   |
+   v
+Consumer
+   |
+   v
+Removed from broker
+
+
+Kafka:
+
+Message stored:
+
+Offset 0  Order-A
+Offset 1  Order-B
+Offset 2  Order-C
+
+Consumer reads:
+
+0 -> 1 -> 2
+
+
+Later another consumer can read:
+
+0 -> 1 -> 2
+
+
+Kafka supports replay by changing the offset.
+
+
+==================================================
+Example: Banking System
+==================================================
+
+JMS approach:
+
+ATM
+ |
+ v
+JMS Queue
+ |
+ v
+Transaction Processor
+
+
+Suitable for:
+
+- Processing one transaction
+- Request/reply communication
+- Guaranteed delivery workflows
+
+
+Kafka approach:
+
+ATM
+ |
+ v
+Kafka Topic: transactions
+ |
+ +--> Fraud Detection Service
+ |
+ +--> Analytics Service
+ |
+ +--> Notification Service
+ |
+ +--> Audit Service
+
+
+Advantages:
+
+- Multiple systems consume the same event
+- Events can be replayed
+- Real-time processing is possible
+
+
+==================================================
+Core Concept Difference
+==================================================
+
+JMS:
+
+"Deliver this message to a consumer."
+
+
+Kafka:
+
+"Publish this event and allow consumers to decide when and how to read it."
+
+
+==================================================
+When to Use JMS
+==================================================
+
+Use JMS when you need:
+
+- Enterprise messaging
+- Transactional queues
+- Request/reply communication
+- Java EE/Jakarta EE applications
+- Point-to-point messaging
+- Traditional application integration
+
+
+==================================================
+When to Use Kafka
+==================================================
+
+Use Kafka when you need:
+
+- High-volume event streaming
+- Multiple independent consumers
+- Real-time analytics
+- Data pipelines
+- Log aggregation
+- Event sourcing
+- Message replay
+- Large-scale distributed processing
+
+
+==================================================
+Simple Analogy
+==================================================
+
+JMS:
+
+Like a mailbox.
+
+A person receives the letter, and it is removed.
+
+
+Kafka:
+
+Like a recorded library.
+
+Many people can read the same information at different times,
+and each person can start from any page (offset).
+
+
+==================================================
+Summary
+==================================================
+
+JMS:
+- Message delivery system
+- Messages are consumed and removed
+- Good for application-to-application communication
+
+Kafka:
+- Event streaming system
+- Messages are retained
+- Consumers track offsets
+- Good for large-scale event-driven architectures
+```
