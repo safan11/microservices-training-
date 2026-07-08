@@ -1,0 +1,376 @@
+=======================================================================
+    DEMO : TIMER + FILE COMPONENT, LEVEL BY LEVEL
+=======================================================================
+
+WHAT WE BUILD (one level at a time — each level runs before the next)
+
+    LEVEL 1 : timer -> log                 your first route
+    LEVEL 2 : file  -> move to output      classic file processing
+    LEVEL 3 : file  -> append trap         see it go wrong on purpose
+    LEVEL 4 : file  -> mirror              the correct pattern
+
+PACKAGE STRUCTURE
+
+    camel-training/
+    |
+    |-- src/main/java/
+    |     |-- com.training.camel_training
+    |           |-- CamelTrainingApplication.java
+    |           |-- routes/
+    |                 |-- TimerRoute.java          <-- we write this
+    |
+    |-- src/main/resources/
+    |     |-- application.properties               <-- Level 0
+    |
+    |-- data/  data2/  data3/                      <-- Camel creates these
+    |
+    |-- pom.xml
+
+
+=======================================================================
+    LEVEL 0 : application.properties  (do this once, first)
+=======================================================================
+
+FILE : src/main/resources/application.properties
+-----------------------------------------------------------------------
+
+    # name shown in every Camel log line
+    camel.main.name=CamelTraining
+
+    # keep the app running (never shut down when idle)
+    camel.main.duration-max-idle-seconds=0
+
+    # readable logs
+    logging.level.org.apache.camel=INFO
+
+-----------------------------------------------------------------------
+
+WHY
+    camel.main.name        -> logs say (CamelTraining) instead of (camel-1)
+    duration-max-idle...=0 -> app stays alive waiting for files/timers
+    logging INFO           -> enough detail without noise
+
+
+=======================================================================
+    LEVEL 1 : TIMER -> LOG   (your first route)
+=======================================================================
+
+FILE : routes/TimerRoute.java
+-----------------------------------------------------------------------
+
+    package com.training.camel_training.routes;
+
+    import org.apache.camel.builder.RouteBuilder;
+    import org.springframework.stereotype.Component;
+
+    @Component
+    public class TimerRoute extends RouteBuilder {
+
+        @Override
+        public void configure() throws Exception {
+
+            from("timer:hello?period=5000&includeMetadata=true")
+                    .routeId("timer-hello-route")
+                    .log("hello camel this is message number ${header.CamelTimerCounter}");
+        }
+    }
+
+-----------------------------------------------------------------------
+
+RUN the app (green arrow on CamelTrainingApplication).
+
+EXPECTED OUTPUT (a new line every 5 seconds)
+
+    ... Routes startup (total:1 started:1)
+    ...     Started timer-hello-route (timer://hello)
+    ... timer-hello-route : hello camel this is message number 1
+    ... timer-hello-route : hello camel this is message number 2
+
+NOTES
+    timer = a trigger, not data. Body is always null.
+    period=5000            -> fire every 5 seconds
+    includeMetadata=true   -> REQUIRED for the CamelTimer* headers
+                              (since Camel 3.19). Without it the
+                              counter prints EMPTY.
+    Misspell an option (includeMetaDate) -> app fails at startup
+    with "Unknown parameters" — Camel checks every option name.
+
+TRY IT  remove &includeMetadata=true, restart:
+    -> "hello camel this is message number "        (empty!)
+Put it back before Level 2.
+
+*** LEVEL 1 DONE ***
+
+
+=======================================================================
+    LEVEL 2 : FILE -> MOVE   (classic file processing)
+=======================================================================
+
+ADD this route below the timer route, inside the same configure():
+
+-----------------------------------------------------------------------
+
+    from("file:data/input")
+            .routeId("file-processing-route")
+            .log("Processing file : ${file:name}")
+            .log("File content    : ${body}")
+            .to("file:data/output");
+
+-----------------------------------------------------------------------
+
+RESTART the app.
+
+EXPECTED OUTPUT AT STARTUP
+
+    ... Routes startup (total:2 started:2)
+    ...     Started timer-hello-route (timer://hello)
+    ...     Started file-processing-route (file://data/input)
+
+TEST (IntelliJ terminal):
+
+    Set-Content data\input\order-1.txt "Order 1: 5 laptops"
+
+EXPECTED OUTPUT
+
+    ... file-processing-route : Processing file : order-1.txt
+    ... file-processing-route : File content    : Order 1: 5 laptops
+
+CHECK
+
+    Get-Content data\output\order-1.txt
+        -> Order 1: 5 laptops
+
+    Get-ChildItem data\input -Force
+        -> only a hidden .camel folder (the original was archived there)
+
+NOTES
+    Default consumer behaviour: after success the original moves
+    into data/input/.camel/ and is never read again.
+    Appending to order-1.txt now does NOTHING — it is done.
+    That is exactly the problem Levels 3 and 4 solve.
+
+*** LEVEL 2 DONE ***
+
+
+=======================================================================
+    LEVEL 3 : THE APPEND TRAP   (watch it go wrong on purpose)
+=======================================================================
+
+Goal: a file we can keep appending to, and every change flows to
+the output. First attempt uses fileExist=Append — and it is WRONG.
+We do it anyway, because seeing it fail teaches the file component
+better than any slide.
+
+ADD this route inside the same configure():
+
+-----------------------------------------------------------------------
+
+    from("file:data2/input?noop=true&idempotentKey=${file:name}-${file:modified}")
+            .routeId("file-append-route")
+            .log("Detected change in : ${file:name}")
+            .to("file:data2/output?fileExist=Append");
+
+-----------------------------------------------------------------------
+
+RESTART. Expected at startup:  total:3 started:3
+
+TEST
+
+    Set-Content data2\input\live.txt "line 1"
+
+EXPECTED OUTPUT
+    ... file-append-route : Detected change in : live.txt
+
+    Add-Content data2\input\live.txt "line 2"
+
+EXPECTED OUTPUT (fires AGAIN — the timestamp changed)
+    ... file-append-route : Detected change in : live.txt
+
+NOW LOOK AT THE OUTPUT:
+
+    Get-Content data2\output\live.txt
+
+EXPECTED (duplicated!)
+
+    line 1
+    line 1
+    line 2
+
+NOTES — why it duplicated
+    noop=true          -> original stays in data2/input (so we CAN
+                          keep appending to it)
+    idempotentKey=
+      ${file:name}-${file:modified}
+                       -> "already done?" memory now includes the
+                          modified timestamp -> every change
+                          re-triggers the route
+    THE TRAP: the consumer always reads the WHOLE file (the OS only
+    says "file changed", never WHAT changed — snapshot, not delta).
+    fileExist=Append then writes that whole snapshot to the END:
+        trigger 1 : whole file = "line 1"           -> appended
+        trigger 2 : whole file = "line 1 + line 2"  -> appended
+    The route did exactly what we asked. What we asked was wrong.
+
+*** LEVEL 3 DONE — you saw the trap with your own eyes ***
+
+
+=======================================================================
+    LEVEL 4 : MIRROR   (the correct pattern)
+=======================================================================
+
+Same consumer, ONE change on the producer: no fileExist=Append.
+The default (Override) replaces the output with the latest
+snapshot -> output always equals input.
+
+ADD this route inside the same configure():
+
+-----------------------------------------------------------------------
+
+    from("file:data3/input?noop=true&idempotentKey=${file:name}-${file:modified}")
+            .routeId("file-mirror-route")
+            .log("Change detected in ${file:name}")
+            .to("file:data3/output");
+
+-----------------------------------------------------------------------
+
+RESTART. Expected at startup:  total:4 started:4
+
+TEST
+
+    Set-Content data3\input\live.txt "line 1"
+    Get-Content data3\output\live.txt
+
+EXPECTED
+    line 1
+
+    Add-Content data3\input\live.txt "line 2"
+    Get-Content data3\output\live.txt
+
+EXPECTED (replaced, not appended — no duplication)
+    line 1
+    line 2
+
+    Add-Content data3\input\live.txt "line 3 - urgent"
+    Get-Content data3\output\live.txt
+
+EXPECTED
+    line 1
+    line 2
+    line 3 - urgent
+
+Input and output now stay identical forever.
+
+*** LEVEL 4 DONE — whatever input has, output has ***
+
+
+=======================================================================
+    THE FINISHED CLASS  (all four routes together, clean)
+=======================================================================
+
+    package com.training.camel_training.routes;
+
+    import org.apache.camel.builder.RouteBuilder;
+    import org.springframework.stereotype.Component;
+
+    @Component
+    public class TimerRoute extends RouteBuilder {
+
+        @Override
+        public void configure() throws Exception {
+
+            from("timer:hello?period=5000&includeMetadata=true")
+                    .routeId("timer-hello-route")
+                    .log("hello camel this is message number ${header.CamelTimerCounter}");
+
+            from("file:data/input")
+                    .routeId("file-processing-route")
+                    .log("Processing file : ${file:name}")
+                    .log("File content    : ${body}")
+                    .to("file:data/output");
+
+            from("file:data2/input?noop=true&idempotentKey=${file:name}-${file:modified}")
+                    .routeId("file-append-route")
+                    .log("Detected change in : ${file:name}")
+                    .to("file:data2/output?fileExist=Append");
+
+            from("file:data3/input?noop=true&idempotentKey=${file:name}-${file:modified}")
+                    .routeId("file-mirror-route")
+                    .log("Change detected in ${file:name}")
+                    .to("file:data3/output");
+        }
+    }
+
+Every from(...) chain is its own independent route with its own
+routeId — Camel starts all of them.
+
+
+=======================================================================
+    REFERENCE : THE OPTIONS USED (and their friends)
+=======================================================================
+
+TIMER  (timer:NAME?options)
+
+    OPTION                DEFAULT     MEANING
+    --------------------  ----------  -------------------------------
+    period=5000           1000        fire every 5000 ms
+    delay=2000            1000        wait before the FIRST fire
+    repeatCount=1         0=forever   fire N times, then stop
+    includeMetadata=true  false       add the CamelTimer* headers
+
+FILE CONSUMER  from("file:FOLDER?options")
+"What happens to the original after success?"
+
+    OPTION                          EFFECT
+    ------------------------------  -------------------------------
+    (default)                       moved into hidden .camel/
+    delete=true                     deleted
+    move=archive/${file:name}       moved to your own folder
+    noop=true                       stays untouched (so you can
+                                    keep appending to it)
+
+    idempotentKey=${file:name}-${file:modified}
+        re-process the file every time it changes
+        (memory is in-RAM: after app restart, noop-files are
+         processed once again — fine for training)
+
+    include=.*\.txt                 only matching file names
+    recursive=true                  include subfolders
+    delay=2000                      poll every 2 s (default 500 ms)
+    readLock=changed                wait until file stops growing
+
+FILE PRODUCER  to("file:FOLDER?options")
+
+    OPTION                          EFFECT
+    ------------------------------  -------------------------------
+    (default)                       keep consumed file's name
+    fileName=out-${date:now:yyyyMMdd}.txt   your own name
+    fileExist=Override  (DEFAULT)   replace existing file
+    fileExist=Append                add to end of existing file
+    fileExist=Ignore                keep old file, drop message
+    fileExist=Fail                  throw an error
+
+RULE OF THUMB
+    whole-file re-reads + Append   = duplicated content  (Level 3)
+    whole-file re-reads + Override = perfect mirror      (Level 4)
+
+
+=======================================================================
+    FINAL CHECKLIST
+=======================================================================
+
+    [ ] Level 1 : timer counts 1, 2, 3... every 5 seconds
+    [ ] Level 1 : you saw the counter go EMPTY without includeMetadata
+    [ ] Level 2 : file moved, original archived in data/input/.camel/
+    [ ] Level 3 : you SAW the duplication and can explain why
+    [ ] Level 4 : output == input after 3 appends
+    [ ] Startup shows: total:4 started:4
+
+ONE-SENTENCE TAKEAWAYS
+    - The timer is a trigger: empty body, headers only on request.
+    - The file consumer delivers snapshots — the whole file, every time.
+    - noop + idempotentKey(name+modified) = "watch this file".
+    - Append is for new data per message; Override is for mirroring.
+
+RELATED
+    demo-file-processing-route.txt   (transform + urgent/normal routing)
+    module-03-first-camel-route.md   (first route, Exchange, Simple)

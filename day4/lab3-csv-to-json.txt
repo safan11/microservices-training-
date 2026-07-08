@@ -1,0 +1,492 @@
+=======================================================================
+    LAB 3 : CSV -> JSON TRANSFORMATION   (level by level)
+=======================================================================
+
+WHAT WE BUILD
+
+    customers.csv --> parse CSV --> Java objects --> JSON output
+
+    LEVEL 1 : read the CSV, log the raw text        (no parsing yet)
+    LEVEL 2 : parse CSV into Java Lists             (see the structure)
+    LEVEL 3 : parse into Maps -> one JSON file      (the real lab goal)
+    LEVEL 4 : extra logic — split per customer,
+              validate email, enrich, route bad
+              rows to an error folder               (learning bonus)
+
+SAMPLE INPUT (used in every level)
+
+    id,name,email
+    1,Rahul,rahul@example.com
+    2,Neha,neha@example.com
+
+PACKAGE STRUCTURE
+
+    camel-training/
+    |-- src/main/java/
+    |     |-- com.training.camel_training
+    |           |-- routes/
+    |                 |-- CsvToJsonRoute.java        <-- this lab
+    |-- data-csv/                                    <-- created by Camel
+    |     |-- input/          (drop customers.csv here)
+    |     |-- output/         (JSON results)
+    |     |-- error/          (Level 4: invalid rows)
+    |-- pom.xml
+
+
+=======================================================================
+    LEVEL 0 : ONE NEW DEPENDENCY
+=======================================================================
+
+CSV is not built into camel-core — it is a DATA FORMAT provided by
+the camel-csv component (uses Apache Commons CSV inside).
+
+Add to pom.xml inside <dependencies> (no version — the BOM has it):
+
+    <dependency>
+        <groupId>org.apache.camel.springboot</groupId>
+        <artifactId>camel-csv-starter</artifactId>
+    </dependency>
+
+Then: Maven refresh (Load Maven Changes).
+
+EXPECTED RESULT: External Libraries now contains
+    org.apache.camel:camel-csv:4.14.x
+    org.apache.commons:commons-csv:...
+
+THEORY — DATA FORMATS RECAP
+    unmarshal = wire format -> Java     (CSV text  -> List/Map)
+    marshal   = Java -> wire format     (List/Map  -> JSON text)
+    This lab is literally:   unmarshal(csv)  ->  marshal(json)
+    with our own logic in between. (OSB: an XQuery doing
+    format-to-format mapping — but in two explicit steps.)
+
+
+=======================================================================
+    LEVEL 1 : READ THE CSV, LOG THE RAW TEXT
+=======================================================================
+
+Goal: prove the file arrives before we touch parsing.
+Never debug parsing and pickup at the same time.
+
+-----------------------------------------------------------------------
+ STEP 1.1   The route
+-----------------------------------------------------------------------
+
+File : routes/CsvToJsonRoute.java
+
+    package com.training.camel_training.routes;
+
+    import org.apache.camel.builder.RouteBuilder;
+    import org.springframework.stereotype.Component;
+
+    @Component
+    public class CsvToJsonRoute extends RouteBuilder {
+
+        @Override
+        public void configure() throws Exception {
+
+            from("file:data-csv/input")
+                    .routeId("csv-to-json-route")
+                    .log("Got file  : ${file:name}")
+                    .log("Raw CSV   :\n${body}");
+        }
+    }
+
+NOTE  The route has no .to(...) yet — perfectly legal. A route must
+      have a from(); everything after is optional. The consumed file
+      still gets archived to .camel/ (default done-strategy).
+
+-----------------------------------------------------------------------
+ STEP 1.2   Run + feed the file
+-----------------------------------------------------------------------
+
+Start the app.
+
+EXPECTED OUTPUT
+    ...     Started csv-to-json-route (file://data-csv/input)
+
+Feed the sample (terminal, project root):
+
+    Set-Content data-csv\input\customers.csv "id,name,email
+    1,Rahul,rahul@example.com
+    2,Neha,neha@example.com"
+
+EXPECTED OUTPUT
+
+    ... csv-to-json-route : Got file  : customers.csv
+    ... csv-to-json-route : Raw CSV   :
+    id,name,email
+    1,Rahul,rahul@example.com
+    2,Neha,neha@example.com
+
+*** LEVEL 1 DONE : pickup works, we saw the raw text ***
+
+
+=======================================================================
+    LEVEL 2 : PARSE CSV -> JAVA LISTS   (see what unmarshal produces)
+=======================================================================
+
+Goal: understand the parsed structure BEFORE converting to JSON.
+
+-----------------------------------------------------------------------
+ STEP 2.1   Add unmarshal().csv()
+-----------------------------------------------------------------------
+
+Replace configure() with:
+
+    @Override
+    public void configure() throws Exception {
+
+        from("file:data-csv/input")
+                .routeId("csv-to-json-route")
+                .log("Got file  : ${file:name}")
+
+                .unmarshal().csv()          // CSV text -> List<List<String>>
+                .log("Parsed    : ${body}")
+                .log("Row count : ${body.size}");
+    }
+
+-----------------------------------------------------------------------
+ STEP 2.2   Restart + feed the SAME file again
+-----------------------------------------------------------------------
+
+(Remember: the old copy is done in .camel/ — create it fresh:)
+
+    Set-Content data-csv\input\customers.csv "id,name,email
+    1,Rahul,rahul@example.com
+    2,Neha,neha@example.com"
+
+EXPECTED OUTPUT
+
+    ... csv-to-json-route : Got file  : customers.csv
+    ... csv-to-json-route : Parsed    : [[id, name, email], [1, Rahul, rahul@example.com], [2, Neha, neha@example.com]]
+    ... csv-to-json-route : Row count : 3
+
+READ THE STRUCTURE CAREFULLY — two problems for our goal:
+
+    1. It is a List of Lists — rows of values, NO field names.
+       JSON made from this would be arrays, not objects.
+    2. The header line "id,name,email" is just row number one —
+       counted as data (Row count : 3, not 2).
+
+Level 3 fixes both with ONE setting.
+
+*** LEVEL 2 DONE : you know what default CSV parsing looks like ***
+
+
+=======================================================================
+    LEVEL 3 : CSV -> MAPS -> ONE JSON FILE   (the real lab goal)
+=======================================================================
+
+The fix: tell the CSV data format to USE MAPS — then the first row
+is treated as the HEADER and every following row becomes a
+Map(column -> value). Maps marshal into proper JSON objects.
+
+-----------------------------------------------------------------------
+ STEP 3.1   The route
+-----------------------------------------------------------------------
+
+Replace the whole file with:
+
+    package com.training.camel_training.routes;
+
+    import org.apache.camel.builder.RouteBuilder;
+    import org.apache.camel.dataformat.csv.CsvDataFormat;
+    import org.apache.camel.model.dataformat.JsonLibrary;
+    import org.springframework.stereotype.Component;
+
+    @Component
+    public class CsvToJsonRoute extends RouteBuilder {
+
+        @Override
+        public void configure() throws Exception {
+
+            // CSV parser configuration:
+            // useMaps -> first row = header, each data row = Map
+            CsvDataFormat csv = new CsvDataFormat();
+            csv.setUseMaps(true);
+
+            from("file:data-csv/input")
+                    .routeId("csv-to-json-route")
+                    .log("Got file  : ${file:name}")
+
+                    .unmarshal(csv)                     // -> List<Map<String,String>>
+                    .log("As maps   : ${body}")
+
+                    .marshal().json(JsonLibrary.Jackson, true)   // -> pretty JSON
+                    .to("file:data-csv/output?fileName=${file:onlyname.noext}.json")
+                    .log("Written   : ${file:onlyname.noext}.json");
+        }
+    }
+
+CAMEL NOTES
+
+    new CsvDataFormat() + unmarshal(csv)
+        When a data format needs configuration, build the object
+        and pass it in — instead of the bare .unmarshal().csv().
+
+    csv.setUseMaps(true)
+        One setting, two effects: header row consumed as field
+        names, rows become Maps. List<Map> is THE bridge shape —
+        Jackson turns it into a JSON array of objects directly.
+
+    marshal().json(JsonLibrary.Jackson, true)
+        true = pretty print. Drop it for compact one-line JSON.
+
+    fileName=${file:onlyname.noext}.json
+        customers.csv -> customers.json (extension swap).
+
+-----------------------------------------------------------------------
+ STEP 3.2   Restart + feed + verify
+-----------------------------------------------------------------------
+
+    Set-Content data-csv\input\customers.csv "id,name,email
+    1,Rahul,rahul@example.com
+    2,Neha,neha@example.com"
+
+EXPECTED OUTPUT
+
+    ... csv-to-json-route : Got file  : customers.csv
+    ... csv-to-json-route : As maps   : [{id=1, name=Rahul, email=rahul@example.com}, {id=2, name=Neha, email=neha@example.com}]
+    ... csv-to-json-route : Written   : customers.json
+
+Row count is now 2 — the header became field names, not data.
+
+CHECK THE RESULT
+
+    Get-Content data-csv\output\customers.json
+
+EXPECTED
+
+    [ {
+      "id" : "1",
+      "name" : "Rahul",
+      "email" : "rahul@example.com"
+    }, {
+      "id" : "2",
+      "name" : "Neha",
+      "email" : "neha@example.com"
+    } ]
+
+(Key order inside the objects may differ — JSON objects are
+ unordered; content is what matters.)
+
+NOTE  "id" : "1"  is a STRING, not a number — CSV has no types,
+      everything arrives as text. If numbers matter, convert in a
+      processor (Level 4 does something similar).
+
+*** LEVEL 3 DONE : CSV file in, JSON file out ***
+
+
+=======================================================================
+    LEVEL 4 : EXTRA LOGIC — SPLIT + VALIDATE + ENRICH + ERROR ROUTE
+=======================================================================
+
+Real-world requirements added:
+
+    - ONE JSON FILE PER CUSTOMER          (Splitter EIP)
+    - email must contain "@"              (validation / routing)
+    - add field  "welcome" : "Hello <name>!"   (enrichment)
+    - invalid rows -> data-csv/error as CSV-like text, not lost
+
+New sample input WITH a broken row (row 3, bad email):
+
+    id,name,email
+    1,Rahul,rahul@example.com
+    2,Neha,neha@example.com
+    3,Broken,no-email-here
+
+-----------------------------------------------------------------------
+ STEP 4.1   The route, final version
+-----------------------------------------------------------------------
+
+    package com.training.camel_training.routes;
+
+    import org.apache.camel.builder.RouteBuilder;
+    import org.apache.camel.dataformat.csv.CsvDataFormat;
+    import org.apache.camel.model.dataformat.JsonLibrary;
+    import org.springframework.stereotype.Component;
+
+    import java.util.Map;
+
+    @Component
+    public class CsvToJsonRoute extends RouteBuilder {
+
+        @Override
+        public void configure() throws Exception {
+
+            CsvDataFormat csv = new CsvDataFormat();
+            csv.setUseMaps(true);
+
+            from("file:data-csv/input")
+                    .routeId("csv-to-json-route")
+                    .log("Got file  : ${file:name}")
+                    .unmarshal(csv)                       // List<Map>
+
+                    // ---------- SPLIT : one exchange per customer ----------
+                    .split(body())
+                        .log("Row ${exchangeProperty.CamelSplitIndex}: ${body}")
+
+                        // stash values in headers while body is a Map
+                        .setHeader("custId",    simple("${body[id]}"))
+                        .setHeader("custName",  simple("${body[name]}"))
+                        .setHeader("custEmail", simple("${body[email]}"))
+
+                        .choice()
+                            // ---------- VALID : email contains @ ----------
+                            .when(simple("${body[email]} contains '@'"))
+
+                                // ---------- ENRICH ----------
+                                .process(exchange -> {
+                                    @SuppressWarnings("unchecked")
+                                    Map<String, Object> cust =
+                                            exchange.getIn().getBody(Map.class);
+                                    cust.put("welcome",
+                                            "Hello " + cust.get("name") + "!");
+                                })
+                                .marshal().json(JsonLibrary.Jackson, true)
+                                .to("file:data-csv/output?fileName=customer-${header.custId}.json")
+                                .log("VALID   -> customer-${header.custId}.json")
+
+                            // ---------- INVALID : to error folder ----------
+                            .otherwise()
+                                .setBody(simple("INVALID ROW: id=${header.custId}, name=${header.custName}, email=${header.custEmail}"))
+                                .to("file:data-csv/error?fileName=invalid-${header.custId}.txt")
+                                .log("INVALID -> invalid-${header.custId}.txt (bad email)")
+                        .end()
+                    .end();
+        }
+    }
+
+CAMEL NOTES
+
+    .split(body())
+        The body is a List -> one Exchange per element (per
+        customer Map). CamelSplitIndex counts 0,1,2...
+
+    headers BEFORE transforming the body
+        After marshal() (or setBody) the Map is gone. We save
+        id/name/email into headers first so file names and error
+        text still work later. Standard Camel idiom.
+
+    simple("${body[email]} contains '@'")
+        Predicate on a Map key. 'contains' is a Simple operator —
+        good-enough email check for a lab (real validation would
+        use bean validation / regex).
+
+    enrichment processor
+        The Map is live — put() adds the field, marshal() sees it.
+        Adding data mid-flow = Content Enricher pattern.
+
+    two .end()
+        first closes the choice, second closes the split.
+        Indentation is for humans; .end() is for Camel.
+
+-----------------------------------------------------------------------
+ STEP 4.2   Restart + feed the file WITH the broken row
+-----------------------------------------------------------------------
+
+    Set-Content data-csv\input\customers.csv "id,name,email
+    1,Rahul,rahul@example.com
+    2,Neha,neha@example.com
+    3,Broken,no-email-here"
+
+EXPECTED OUTPUT
+
+    ... csv-to-json-route : Got file  : customers.csv
+    ... csv-to-json-route : Row 0: {id=1, name=Rahul, email=rahul@example.com}
+    ... csv-to-json-route : VALID   -> customer-1.json
+    ... csv-to-json-route : Row 1: {id=2, name=Neha, email=neha@example.com}
+    ... csv-to-json-route : VALID   -> customer-2.json
+    ... csv-to-json-route : Row 2: {id=3, name=Broken, email=no-email-here}
+    ... csv-to-json-route : INVALID -> invalid-3.txt (bad email)
+
+-----------------------------------------------------------------------
+ STEP 4.3   Verify all three results
+-----------------------------------------------------------------------
+
+    Get-Content data-csv\output\customer-1.json
+
+EXPECTED
+
+    {
+      "id" : "1",
+      "name" : "Rahul",
+      "email" : "rahul@example.com",
+      "welcome" : "Hello Rahul!"
+    }
+
+    Get-Content data-csv\output\customer-2.json
+
+EXPECTED   (same shape, Neha's data, "welcome" : "Hello Neha!")
+
+    Get-Content data-csv\error\invalid-3.txt
+
+EXPECTED
+
+    INVALID ROW: id=3, name=Broken, email=no-email-here
+
+FINAL FOLDER PICTURE
+
+    data-csv/
+    |-- input/
+    |     |-- .camel/            (consumed customers.csv files)
+    |-- output/
+    |     |-- customers.json     (Level 3)
+    |     |-- customer-1.json    (Level 4)
+    |     |-- customer-2.json
+    |-- error/
+          |-- invalid-3.txt
+
+*** LEVEL 4 DONE : parse -> split -> validate -> enrich -> route ***
+
+
+=======================================================================
+    TROUBLESHOOTING
+=======================================================================
+
+    SYMPTOM                              CAUSE -> FIX
+    -----------------------------------  --------------------------------
+    "Cannot resolve ... csv" red code    camel-csv-starter missing in
+                                         pom.xml, or Maven not refreshed
+
+    Parsed body shows header as data,    Level 2 default parsing —
+    JSON becomes arrays not objects      you forgot csv.setUseMaps(true)
+
+    ${body[email]} prints empty          Body is not a Map anymore —
+                                         marshal()/setBody() ran before
+                                         the check; reorder the steps
+
+    Everything logged once, then         Old file done in .camel/ —
+    nothing on re-test                   Set-Content a fresh file
+
+    JSON key order different than mine   Normal — JSON objects are
+                                         unordered; compare content
+
+    Row 3 went to output anyway          'contains' check typo, or the
+                                         choice sits after marshal()
+
+
+=======================================================================
+    FINAL CHECKLIST
+=======================================================================
+
+    [ ] Level 1 : raw CSV text logged
+    [ ] Level 2 : List<List> seen, header counted as row (the problem)
+    [ ] Level 3 : customers.json is a JSON array of objects
+    [ ] Level 4 : customer-1/2.json with "welcome" field
+    [ ] Level 4 : invalid-3.txt in the error folder
+    [ ] You can say why headers are set BEFORE marshal()
+
+ONE-SENTENCE TAKEAWAYS
+    - unmarshal(csv with useMaps) -> List<Map> is the bridge shape
+      between CSV and JSON.
+    - CSV values are always strings — types are your job.
+    - Split early, stash key fields in headers, transform late.
+    - Bad rows are routed, never dropped — every message ends
+      SOMEWHERE you can look at.
+
+RELATED
+    module-04-transformations.md      (marshal/unmarshal, Jackson)
+    module-05-eips.md                 (split, choice, headers idiom)
+    demo-timer-and-file-options.txt   (file consumer options)

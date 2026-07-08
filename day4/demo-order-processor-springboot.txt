@@ -1,0 +1,244 @@
+=======================================================================
+    DEMO : ORDER FILE PROCESSOR  (SPRING BOOT)
+=======================================================================
+
+    data-orders/input/order.txt --> Camel route --> decision
+                                                    HIGH VALUE / NORMAL
+                                    file moves to data-orders/processed
+
+
+=======================================================================
+    STEP 1 : PROJECT SETUP  (5 minutes, once)
+=======================================================================
+
+1. Go to  https://start.spring.io
+
+        Project      : Maven
+        Language     : Java
+        Spring Boot  : 3.5.x
+        Group        : com.example
+        Artifact     : camel-order-demo
+        Java         : 17
+
+2. ADD DEPENDENCIES ->  "Apache Camel"      (that is the only one)
+
+3. GENERATE -> unzip -> IntelliJ: File -> Open -> the folder
+   -> wait until Maven import finishes (bar bottom-right).
+
+DEPENDENCY NOTE (all you need to know):
+
+    camel-spring-boot-starter   = Camel engine + file/timer/log
+                                  components, auto-started by Spring
+    version                     = managed by the generated BOM,
+                                  you never type Camel versions
+
+PROJECT STRUCTURE AFTER SETUP:
+
+    camel-order-demo/
+    |-- pom.xml                                  (leave as generated)
+    |-- src/main/java/
+    |     |-- com.example.camelorderdemo
+    |           |-- CamelOrderDemoApplication.java
+    |           |-- routes/                      <-- create this package
+    |                 |-- OrderProcessorRoute.java   <-- create this class
+
+
+=======================================================================
+    STEP 2 : THE ROUTE  (Level 1 — simple version)
+=======================================================================
+
+File: routes/OrderProcessorRoute.java
+
+    package com.example.camelorderdemo.routes;
+
+    import org.apache.camel.builder.RouteBuilder;
+    import org.springframework.stereotype.Component;
+
+    @Component
+    public class OrderProcessorRoute extends RouteBuilder {
+
+        @Override
+        public void configure() throws Exception {
+
+            from("file:data-orders/input?move=../processed")
+                    .routeId("order-processor-route")
+                    .log("========== NEW ORDER ==========")
+                    .log("File Name     : ${header.CamelFileName}")
+                    .log("Order Details : ${body}")
+                    .choice()
+                        .when(body().contains("Amount: 2000"))
+                            .log("HIGH VALUE ORDER - NEEDS APPROVAL")
+                        .otherwise()
+                            .log("NORMAL ORDER")
+                    .end();
+        }
+    }
+
+EXPLAIN (3 lines):
+    @Component            -> Spring finds it, Camel starts it. Forget it = route silently skipped.
+    move=../processed     -> after success, file moves to data-orders/processed. On failure it stays.
+    choice/when/otherwise -> if/else for messages.
+
+
+=======================================================================
+    STEP 3 : RUN + TEST
+=======================================================================
+
+Run CamelOrderDemoApplication (green arrow).
+
+EXPECTED AT STARTUP:
+
+    ...  Started order-processor-route (file://data-orders/input)
+
+-----------------------------------------------------------------------
+ TEST 1 : normal order
+-----------------------------------------------------------------------
+Terminal:
+
+    Set-Content data-orders\input\order1.txt "Order ID: 1001
+    Customer: John
+    Amount: 500"
+
+OUTPUT:
+
+    ========== NEW ORDER ==========
+    File Name     : order1.txt
+    Order Details : Order ID: 1001
+    Customer: John
+    Amount: 500
+    NORMAL ORDER
+
+CHECK:   Get-ChildItem data-orders\processed   ->  order1.txt  (moved!)
+
+-----------------------------------------------------------------------
+ TEST 2 : high value order
+-----------------------------------------------------------------------
+
+    Set-Content data-orders\input\order2.txt "Order ID: 2001
+    Customer: Alice
+    Amount: 2000"
+
+OUTPUT:
+
+    ========== NEW ORDER ==========
+    File Name     : order2.txt
+    Order Details : Order ID: 2001
+    Customer: Alice
+    Amount: 2000
+    HIGH VALUE ORDER - NEEDS APPROVAL
+
+-----------------------------------------------------------------------
+ TEST 3 : the trap!
+-----------------------------------------------------------------------
+
+    Set-Content data-orders\input\order3.txt "Order ID: 3001
+    Customer: Bob
+    Amount: 9000"
+
+OUTPUT:
+
+    NORMAL ORDER          <-- WRONG! 9000 should be high value
+
+WHY: contains("Amount: 2000") compares TEXT, not the number.
+Only the exact string "Amount: 2000" matches. Fix below.
+
+
+=======================================================================
+    STEP 4 : THE FIX  (Level 2 — real numeric rule > 1000)
+=======================================================================
+
+Replace configure():
+
+    @Override
+    public void configure() throws Exception {
+
+        from("file:data-orders/input?move=../processed")
+                .routeId("order-processor-route")
+                .log("========== NEW ORDER ==========")
+                .log("File Name     : ${header.CamelFileName}")
+                .log("Order Details : ${body}")
+
+                // parse "Amount: xxx" into a header
+                .process(exchange -> {
+                    String body = exchange.getIn().getBody(String.class);
+                    int amount = 0;
+                    for (String line : body.split("\\R")) {
+                        if (line.trim().startsWith("Amount:")) {
+                            amount = Integer.parseInt(line.replace("Amount:", "").trim());
+                        }
+                    }
+                    exchange.getIn().setHeader("orderAmount", amount);
+                })
+                .log("Amount parsed : ${header.orderAmount}")
+
+                // decide on the VALUE
+                .choice()
+                    .when(header("orderAmount").isGreaterThan(1000))
+                        .log("HIGH VALUE ORDER (${header.orderAmount}) - NEEDS APPROVAL")
+                    .otherwise()
+                        .log("NORMAL ORDER (${header.orderAmount})")
+                .end();
+    }
+
+EXPLAIN (3 lines):
+    process(...)                 -> own Java: find the Amount line, parse the number
+    setHeader("orderAmount",...) -> parse once, store in header, decide on header (standard idiom)
+    isGreaterThan(1000)          -> real number comparison, rule lives in ONE place
+
+
+=======================================================================
+    STEP 5 : RE-TEST  (restart the app first)
+=======================================================================
+
+    Set-Content data-orders\input\order1.txt "Order ID: 1001
+    Customer: John
+    Amount: 500"
+
+OUTPUT:    Amount parsed : 500
+           NORMAL ORDER (500)
+
+    Set-Content data-orders\input\order2.txt "Order ID: 2001
+    Customer: Alice
+    Amount: 2000"
+
+OUTPUT:    Amount parsed : 2000
+           HIGH VALUE ORDER (2000) - NEEDS APPROVAL
+
+    Set-Content data-orders\input\order3.txt "Order ID: 3001
+    Customer: Bob
+    Amount: 9000"
+
+OUTPUT:    Amount parsed : 9000
+           HIGH VALUE ORDER (9000) - NEEDS APPROVAL     <-- fixed!
+
+FINAL FOLDERS:
+
+    data-orders/
+    |-- input/          (empty)
+    |-- processed/      order1.txt  order2.txt  order3.txt
+
+
+=======================================================================
+    IF SOMETHING GOES WRONG
+=======================================================================
+
+    No "Started order-processor-route"   -> @Component missing, or the
+                                            routes package is not under
+                                            com.example.camelorderdemo
+    "from" is red in the editor          -> extends RouteBuilder missing
+    File stays in input                  -> an exception above in the
+                                            log; move= only on success
+    Re-feeding same file does nothing    -> already in processed/,
+                                            use a new file name
+    NumberFormatException                -> Amount line malformed
+                                            ("Amount: 2,000")
+
+
+=======================================================================
+    SESSION SUMMARY  (say this at the end)
+=======================================================================
+
+    from()    = watch the folder            (OSB proxy service)
+    choice()  = the business decision       (OSB branch node)
+    move=     = Camel owns the file lifecycle, zero file code
+    ~25 lines that read like the architecture diagram.
