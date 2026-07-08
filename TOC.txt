@@ -1,0 +1,360 @@
+=======================================================================
+
+    5-DAY TRAINING : MICROSERVICES WITH SPRING BOOT, KAFKA,
+    APACHE CAMEL, DOCKER AND KUBERNETES
+
+    Java 21  |  Spring Boot 3.4  |  hands-on labs every day
+
+=======================================================================
+
+
+=======================================================================
+    DAY 1 : JAVA 21, SPRING BOOT 3.4 AND REST API
+=======================================================================
+
+FOCUS
+    Build a clean Spring Boot REST API using Java 21 and
+    Spring Boot 3.4.
+
+COVERAGE
+    - Introduction to microservices
+    - Monolith vs microservices
+    - Spring Boot project structure
+    - Controller, Service and Repository layers
+    - DTOs
+    - Basic validation
+    - Exception handling
+    - API testing using Postman
+
+LABS
+-----------------------------------------------------------------------
+ LAB 1 : Create Spring Boot Project
+-----------------------------------------------------------------------
+    Create a new Spring Boot 3.4 project with:
+        - Spring Web
+        - Spring Validation
+        - Lombok
+        - Spring Boot DevTools
+
+-----------------------------------------------------------------------
+ LAB 2 : Build Customer Service
+-----------------------------------------------------------------------
+    Create REST APIs for:
+        - Add customer
+        - Get all customers
+        - Get customer by ID
+        - Update customer
+        - Delete customer
+
+-----------------------------------------------------------------------
+ LAB 3 : Add Validation and Exception Handling
+-----------------------------------------------------------------------
+    Add:
+        - Request DTO
+        - Response DTO
+        - Validation rules
+        - Custom exception
+        - Global exception handler
+
+
+=======================================================================
+    DAY 2 : MICROSERVICE COMMUNICATION
+=======================================================================
+
+FOCUS
+    Create two microservices and make them communicate with
+    each other.
+
+COVERAGE
+    - Service boundaries
+    - Customer Service and Order Service design
+    - REST-based communication
+    - RestClient or OpenFeign
+    - Handling service failure
+    - Spring Boot Actuator basics
+
+LABS
+-----------------------------------------------------------------------
+ LAB 1 : Create Order Service
+-----------------------------------------------------------------------
+    Create a new Spring Boot microservice for managing orders.
+
+-----------------------------------------------------------------------
+ LAB 2 : Call Customer Service from Order Service
+-----------------------------------------------------------------------
+    When creating an order:
+        - Accept customer ID
+        - Call Customer Service
+        - Check if customer exists
+        - Create order only if customer is valid
+
+-----------------------------------------------------------------------
+ LAB 3 : Add Actuator
+-----------------------------------------------------------------------
+    Add health check endpoints:
+        /actuator/health
+        /actuator/info
+
+-----------------------------------------------------------------------
+ LAB 4 : Handle Failure
+-----------------------------------------------------------------------
+    Stop Customer Service and test Order Service.
+    Add a proper error response when Customer Service is
+    unavailable.
+
+
+=======================================================================
+    DAY 3 : KAFKA FOR EVENT-DRIVEN MICROSERVICES
+=======================================================================
+
+FOCUS
+    Use Kafka to send order events between microservices.
+
+COVERAGE
+    - What is Kafka?
+    - Producer and consumer
+    - Topic
+    - Consumer group
+    - Event-driven communication
+    - Publishing events from Spring Boot
+    - Consuming events in Spring Boot
+
+LABS
+-----------------------------------------------------------------------
+ LAB 1 : Run Kafka Using Docker
+-----------------------------------------------------------------------
+    Run Kafka locally using Docker Compose.
+    Create topic:
+        order-created-topic
+
+-----------------------------------------------------------------------
+ LAB 2 : Publish Order Event
+-----------------------------------------------------------------------
+    When an order is created, publish an event to Kafka.
+
+    Sample event:
+
+        {
+            "orderId":    101,
+            "customerId": 1,
+            "amount":     2500,
+            "status":     "CREATED"
+        }
+
+-----------------------------------------------------------------------
+ LAB 3 : Create Notification Service
+-----------------------------------------------------------------------
+    Create a Notification Service that consumes
+    order-created-topic and prints a notification message.
+
+-----------------------------------------------------------------------
+ LAB 4 : Add Billing Consumer
+-----------------------------------------------------------------------
+    Create a Billing Service that also consumes the same event
+    using a SEPARATE consumer group.
+    (Same group = split the work. Different group = every group
+    gets all messages.)
+
+
+=======================================================================
+    DAY 4 : APACHE CAMEL FOR ENTERPRISE INTEGRATION
+=======================================================================
+
+FOCUS
+    Use Apache Camel to process files and connect systems.
+
+COVERAGE
+    - What is Apache Camel?
+    - Camel route
+    - Camel endpoint
+    - Camel processor
+    - File processing
+    - Basic data transformation
+    - REST to Kafka integration
+
+LABS
+-----------------------------------------------------------------------
+ LAB 1 : Create Camel Spring Boot Project
+-----------------------------------------------------------------------
+    Create an Apache Camel project using Spring Boot.
+    Create a basic route:
+        timer -> log
+
+-----------------------------------------------------------------------
+ LAB 2 : File Processing Route
+-----------------------------------------------------------------------
+    Create a route:
+        input folder -> process file -> output folder
+
+    The route should:
+        - Read files from the input folder
+        - Log file content
+        - Move processed files to the output folder
+
+-----------------------------------------------------------------------
+ LAB 3 : CSV to JSON Transformation
+-----------------------------------------------------------------------
+    Read customer CSV data and convert it into JSON.
+
+    Sample CSV:
+
+        id,name,email
+        1,Rahul,rahul@example.com
+        2,Neha,neha@example.com
+
+-----------------------------------------------------------------------
+ LAB 4 : REST to Kafka Route
+-----------------------------------------------------------------------
+    Create a Camel route:
+        REST endpoint -> Kafka topic
+
+    Endpoint:
+        POST /camel/orders
+
+    The route should accept an order request and publish it
+    to Kafka.
+
+
+=======================================================================
+    DAY 5 : DOCKER, KUBERNETES AND CAPSTONE
+=======================================================================
+
+FOCUS
+    Containerize and deploy the application.
+
+COVERAGE
+    - Docker basics
+    - Dockerfile for Spring Boot
+    - Docker Compose
+    - Kubernetes basics
+    - Pod, Deployment and Service
+    - Deploying microservices
+    - Viewing logs and troubleshooting
+
+LABS
+-----------------------------------------------------------------------
+ LAB 1 : Dockerize Services
+-----------------------------------------------------------------------
+    Create Dockerfiles for:
+        - Customer Service
+        - Order Service
+        - Notification Service
+        - Camel Integration Service
+
+-----------------------------------------------------------------------
+ LAB 2 : Run Using Docker Compose
+-----------------------------------------------------------------------
+    Run the complete system using Docker Compose:
+        - Customer Service
+        - Order Service
+        - Notification Service
+        - Kafka
+        - Camel Integration Service
+
+-----------------------------------------------------------------------
+ LAB 3 : Deploy to Kubernetes
+-----------------------------------------------------------------------
+    Create basic Kubernetes YAML files:
+        - Deployment
+        - Service
+        - ConfigMap
+
+    Deploy and inspect:
+
+        kubectl apply -f .
+        kubectl get pods
+        kubectl get services
+        kubectl logs <pod-name>
+
+-----------------------------------------------------------------------
+ LAB 4 : Scale Order Service
+-----------------------------------------------------------------------
+
+        kubectl scale deployment order-service --replicas=2
+
+
+=======================================================================
+    CAPSTONE PROJECT : ENTERPRISE ORDER PROCESSING PLATFORM
+=======================================================================
+
+OBJECTIVE
+    Build a microservices-based order processing system using
+    Spring Boot, Kafka, Apache Camel, Docker and Kubernetes.
+
+SERVICES
+
+    CUSTOMER SERVICE
+        - Add customer
+        - View customer
+        - Update customer
+        - Delete customer
+
+    ORDER SERVICE
+        - Create order
+        - Validate customer
+        - Publish order-created event to Kafka
+
+    NOTIFICATION SERVICE
+        - Consume order-created event
+        - Print notification message
+
+    BILLING SERVICE
+        - Consume order-created event
+        - Print billing message
+
+    CAMEL INTEGRATION SERVICE
+        - Accept external order request
+        - Process file input
+        - Publish order message to Kafka
+
+ARCHITECTURE
+
+     +----------+   REST    +---------+   validate   +----------+
+     |  Client  | --------> |  ORDER  | -----------> | CUSTOMER |
+     +----------+           | SERVICE |   customer   | SERVICE  |
+                            +----|----+              +----------+
+     +---------------+          |
+     | CAMEL         |          |  order-created event
+     | INTEGRATION   |----+     v
+     | (REST + file) |    |  +------------------------+
+     +---------------+    +->|  KAFKA                 |
+                             |  order-created-topic   |
+                             +-----|--------------|---+
+                                   |              |
+                                   v              v
+                          +--------------+  +-----------+
+                          | NOTIFICATION |  |  BILLING  |
+                          |   SERVICE    |  |  SERVICE  |
+                          +--------------+  +-----------+
+
+
+=======================================================================
+    FINAL OUTCOME
+=======================================================================
+
+By the end of the training, participants will be able to:
+
+    [ ] Build REST APIs using Spring Boot
+    [ ] Create basic microservices
+    [ ] Connect microservices using REST
+    [ ] Use Kafka for event communication
+    [ ] Build Apache Camel routes
+    [ ] Dockerize Spring Boot services
+    [ ] Deploy services to Kubernetes
+
+
+=======================================================================
+    TOOLS REQUIRED
+=======================================================================
+
+    - Java 21
+    - Spring Boot 3.4
+    - Maven
+    - IntelliJ IDEA or Eclipse
+    - Postman
+    - Docker Desktop
+    - Kafka using Docker Compose
+    - Apache Camel
+    - Kubernetes using Docker Desktop, Minikube or Kind
+    - kubectl
+    - GitHub
