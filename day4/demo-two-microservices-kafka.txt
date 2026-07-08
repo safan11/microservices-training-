@@ -1,0 +1,549 @@
+=======================================================================
+    DEMO : TWO MICROSERVICES WITH CAMEL + KAFKA
+    order-service  +  user-service  ->  orders saved to Excel
+=======================================================================
+
+WHAT WE BUILD
+
+    Two separate Spring Boot applications, talking through Kafka
+    and REST — a real microservice pattern, kept as simple as
+    possible.
+
+    1. Client POSTs an order (JSON) to order-service
+    2. order-service publishes it to Kafka topic "orders"
+    3. order-service's consumer picks it up from the topic
+    4. It asks user-service: "does this user exist?"
+       (user-service holds a dummy user list — no database)
+    5. User exists     -> order row saved to orders.csv
+                          (opens directly in Excel)
+       User not found  -> order row saved to rejected.csv
+
+ARCHITECTURE
+
+     +--------+  POST /orders   +----------------------------------+
+     | Client | --------------> |  ORDER-SERVICE  (port 8080)      |
+     | (curl) |                 |                                  |
+     +--------+                 |  route 1: REST -> kafka:orders   |
+                                +----------------|-----------------+
+                                                 |
+                                                 v
+                                +----------------------------------+
+                                |  KAFKA (Docker, port 9092)       |
+                                |  topic: orders                   |
+                                +----------------|-----------------+
+                                                 |
+                                                 v
+                                +----------------------------------+
+                                |  ORDER-SERVICE consumer route    |
+                                |  kafka:orders -> check user      |
+                                +-------|------------------|-------+
+                                        |                  |
+                          GET /users/{id}                  |
+                                        v                  |
+                    +-------------------------+            |
+                    | USER-SERVICE (port 8081)|            |
+                    | dummy users:            |            |
+                    |   U1 Rahul              |            |
+                    |   U2 Neha               |            |
+                    |   U3 Asha               |            |
+                    +-------------------------+            |
+                          200 = exists                     v
+                          404 = not found      +----------------------+
+                                               | user exists:         |
+                                               |   data/excel/        |
+                                               |   orders.csv         |
+                                               | user missing:        |
+                                               |   data/rejected/     |
+                                               |   rejected.csv       |
+                                               +----------------------+
+
+WHAT YOU NEED
+    [ ] IntelliJ IDEA
+    [ ] Java 17+            java -version
+    [ ] Docker Desktop      docker version (Client AND Server)
+
+NOTE ON "EXCEL"
+    We write CSV — Excel opens it with a double-click, one order
+    per row. This is the simple, standard way. (True .xlsx needs
+    the Apache POI library in a processor — mention it, skip it.)
+
+
+=======================================================================
+    PART A : KAFKA IN DOCKER  (5 minutes)
+=======================================================================
+
+Create a work folder, e.g.  C:\training\micro-demo
+Inside it:
+
+FILE : docker-compose.yml
+-----------------------------------------------------------------------
+
+    services:
+      kafka:
+        image: apache/kafka:latest
+        container_name: kafka
+        ports:
+          - "9092:9092"
+
+-----------------------------------------------------------------------
+
+TERMINAL (in that folder):
+
+    docker compose up -d
+
+EXPECTED
+    Container kafka  Started
+
+Create the topic:
+
+    docker exec kafka /opt/kafka/bin/kafka-topics.sh --create --topic orders --bootstrap-server localhost:9092
+
+EXPECTED
+    Created topic orders.
+
+
+=======================================================================
+    PART B : USER-SERVICE  (the simple one — build it first)
+=======================================================================
+
+-----------------------------------------------------------------------
+ B1. Create the project
+-----------------------------------------------------------------------
+
+https://start.spring.io
+
+    Project      : Maven          Language : Java
+    Spring Boot  : 3.5.x          Java     : 17
+    Group        : com.example
+    Artifact     : user-service
+
+ADD DEPENDENCIES:
+    1. Spring Web
+    2. Apache Camel
+
+GENERATE -> unzip into the work folder -> open in IntelliJ.
+
+-----------------------------------------------------------------------
+ B2. Add two starters to pom.xml   (inside <dependencies>, no versions)
+-----------------------------------------------------------------------
+
+    <!-- REST DSL on the Spring Boot web server -->
+    <dependency>
+        <groupId>org.apache.camel.springboot</groupId>
+        <artifactId>camel-platform-http-starter</artifactId>
+    </dependency>
+
+    <!-- JSON binding for REST responses -->
+    <dependency>
+        <groupId>org.apache.camel.springboot</groupId>
+        <artifactId>camel-jackson-starter</artifactId>
+    </dependency>
+
+Click "Load Maven Changes".
+
+-----------------------------------------------------------------------
+ B3. application.properties
+-----------------------------------------------------------------------
+
+FILE : src/main/resources/application.properties
+
+    # user-service runs on its own port
+    server.port=8081
+
+    camel.main.name=UserService
+
+WHY server.port: both services run on ONE laptop — they must not
+fight over port 8080. order-service keeps 8080, user-service
+takes 8081.
+
+-----------------------------------------------------------------------
+ B4. The route  (full code)
+-----------------------------------------------------------------------
+
+Create package "routes" under com.example.userservice, then:
+
+FILE : routes/UserServiceRoute.java
+-----------------------------------------------------------------------
+
+    package com.example.userservice.routes;
+
+    import org.apache.camel.Exchange;
+    import org.apache.camel.builder.RouteBuilder;
+    import org.apache.camel.model.rest.RestBindingMode;
+    import org.springframework.stereotype.Component;
+
+    import java.util.Map;
+
+    @Component
+    public class UserServiceRoute extends RouteBuilder {
+
+        private static final Map<String, String> USERS = Map.of(
+                "U1", "Rahul",
+                "U2", "Neha",
+                "U3", "Asha");
+
+        @Override
+        public void configure() throws Exception {
+
+            restConfiguration().bindingMode(RestBindingMode.json);
+
+            rest("/users")
+                .get("/{id}")
+                .to("direct:getUser");
+
+            from("direct:getUser")
+                .routeId("get-user")
+                .process(exchange -> {
+                    String id = exchange.getIn().getHeader("id", String.class);
+                    String name = USERS.get(id);
+                    if (name != null) {
+                        exchange.getMessage().setBody(Map.of("userId", id, "name", name));
+                    } else {
+                        exchange.getMessage().setHeader(Exchange.HTTP_RESPONSE_CODE, 404);
+                        exchange.getMessage().setBody(Map.of("error", "user not found"));
+                    }
+                });
+        }
+    }
+
+-----------------------------------------------------------------------
+
+EXPLAIN
+    USERS map                     the dummy "database" — three users
+    rest("/users").get("/{id}")   HTTP contract: GET /users/U1
+    header("id")                  path parameter {id} arrives as a header
+    setBody(Map.of(...))          binding mode json turns the Map into
+                                  a JSON response automatically
+    HTTP_RESPONSE_CODE 404        unknown user -> proper REST answer
+
+-----------------------------------------------------------------------
+ B5. Run and test user-service ALONE  (always test services alone first)
+-----------------------------------------------------------------------
+
+Run UserServiceApplication.
+
+EXPECTED AT STARTUP
+    ... Started get-user (direct://getUser)
+    ... Tomcat started on port 8081
+
+TEST — existing user:
+
+    curl.exe http://localhost:8081/users/U1
+
+EXPECTED
+    {"userId":"U1","name":"Rahul"}
+
+TEST — unknown user:
+
+    curl.exe -i http://localhost:8081/users/U9
+
+EXPECTED
+    HTTP/1.1 404
+    {"error":"user not found"}
+
+*** user-service DONE — leave it RUNNING ***
+
+
+=======================================================================
+    PART C : ORDER-SERVICE  (REST -> Kafka -> check user -> Excel)
+=======================================================================
+
+-----------------------------------------------------------------------
+ C1. Create the project
+-----------------------------------------------------------------------
+
+https://start.spring.io  — same as before, but:
+
+    Artifact : order-service
+
+ADD DEPENDENCIES:
+    1. Spring Web
+    2. Apache Camel
+
+GENERATE -> unzip -> open in IntelliJ (2nd IntelliJ window:
+File -> Open -> select folder -> "New Window").
+
+-----------------------------------------------------------------------
+ C2. Add four starters to pom.xml   (inside <dependencies>, no versions)
+-----------------------------------------------------------------------
+
+    <!-- REST DSL on the Spring Boot web server -->
+    <dependency>
+        <groupId>org.apache.camel.springboot</groupId>
+        <artifactId>camel-platform-http-starter</artifactId>
+    </dependency>
+
+    <!-- Kafka component -->
+    <dependency>
+        <groupId>org.apache.camel.springboot</groupId>
+        <artifactId>camel-kafka-starter</artifactId>
+    </dependency>
+
+    <!-- JSON parsing -->
+    <dependency>
+        <groupId>org.apache.camel.springboot</groupId>
+        <artifactId>camel-jackson-starter</artifactId>
+    </dependency>
+
+    <!-- calling user-service over HTTP -->
+    <dependency>
+        <groupId>org.apache.camel.springboot</groupId>
+        <artifactId>camel-http-starter</artifactId>
+    </dependency>
+
+Click "Load Maven Changes".
+
+-----------------------------------------------------------------------
+ C3. application.properties
+-----------------------------------------------------------------------
+
+FILE : src/main/resources/application.properties
+
+    server.port=8080
+
+    camel.main.name=OrderService
+
+    # the Kafka broker (Docker container from Part A)
+    camel.component.kafka.brokers=localhost:9092
+
+-----------------------------------------------------------------------
+ C4. The routes  (full code — two routes in one class)
+-----------------------------------------------------------------------
+
+Create package "routes" under com.example.orderservice, then:
+
+FILE : routes/OrderServiceRoute.java
+-----------------------------------------------------------------------
+
+    package com.example.orderservice.routes;
+
+    import org.apache.camel.Exchange;
+    import org.apache.camel.builder.RouteBuilder;
+    import org.apache.camel.model.dataformat.JsonLibrary;
+    import org.springframework.stereotype.Component;
+
+    @Component
+    public class OrderServiceRoute extends RouteBuilder {
+
+        @Override
+        public void configure() throws Exception {
+
+            // ROUTE 1 : REST -> Kafka topic
+            rest("/orders")
+                .post()
+                .to("direct:publishOrder");
+
+            from("direct:publishOrder")
+                .routeId("order-api")
+                .convertBodyTo(String.class)
+                .log("API received order : ${body}")
+                .to("kafka:orders")
+                .setBody(constant("{\"status\":\"QUEUED\"}"));
+
+            // ROUTE 2 : Kafka -> check user -> Excel (CSV) or rejected
+            from("kafka:orders?groupId=order-service")
+                .routeId("order-consumer")
+                .log("Consumed from Kafka : ${body}")
+                .unmarshal().json(JsonLibrary.Jackson)
+
+                .setHeader("orderId", simple("${body[orderId]}"))
+                .setHeader("userId",  simple("${body[userId]}"))
+                .setHeader("item",    simple("${body[item]}"))
+                .setHeader("amount",  simple("${body[amount]}"))
+
+                .setHeader(Exchange.HTTP_METHOD, constant("GET"))
+                .toD("http://localhost:8081/users/${header.userId}?throwExceptionOnFailure=false")
+
+                .choice()
+                    .when(header(Exchange.HTTP_RESPONSE_CODE).isEqualTo(200))
+                        .log("User ${header.userId} EXISTS -> saving order ${header.orderId}")
+                        .setBody(simple("${header.orderId},${header.userId},${header.item},${header.amount},${date:now:yyyy-MM-dd HH:mm:ss}\n"))
+                        .to("file:data/excel?fileName=orders.csv&fileExist=Append")
+                    .otherwise()
+                        .log("User ${header.userId} NOT FOUND -> rejecting order ${header.orderId}")
+                        .setBody(simple("${header.orderId},${header.userId},user not found\n"))
+                        .to("file:data/rejected?fileName=rejected.csv&fileExist=Append")
+                .end();
+        }
+    }
+
+-----------------------------------------------------------------------
+
+EXPLAIN — the six moves that make Route 2 work
+
+    1  unmarshal().json(...)      Kafka gave us JSON text; make it a
+                                  Map so we can read the fields
+
+    2  setHeader(...) x4          STASH the order fields in headers
+                                  NOW — the next step will REPLACE
+                                  the body with user-service's
+                                  response, but headers survive.
+                                  (The most important idiom in Camel.)
+
+    3  toD("http://...${header.userId}...")
+                                  toD = "to Dynamic": the URI is
+                                  built per message (different user
+                                  id each time). Plain to() cannot
+                                  do that.
+
+    4  throwExceptionOnFailure=false
+                                  a 404 from user-service is a
+                                  VALID business answer, not an
+                                  error — do not throw, let us
+                                  check the status code ourselves
+
+    5  when(HTTP_RESPONSE_CODE == 200)
+                                  the decision: 200 = user exists,
+                                  anything else = reject
+
+    6  setBody(simple("...")) + fileExist=Append
+                                  build one CSV row from the stashed
+                                  headers, append it to the sheet.
+                                  Columns: orderId,userId,item,
+                                  amount,timestamp
+
+
+=======================================================================
+    PART D : END-TO-END TEST
+=======================================================================
+
+RUNNING CHECKLIST (three things must be up):
+    [ ] Kafka container            docker ps -> kafka Up
+    [ ] user-service on 8081       (Part B5, still running)
+    [ ] order-service on 8080      run OrderServiceApplication now
+
+EXPECTED AT order-service STARTUP
+    ... Started order-api (rest://post:/orders)
+    ... Started order-consumer (kafka://orders)
+    ... Tomcat started on port 8080
+
+-----------------------------------------------------------------------
+ TEST 1 : order from an EXISTING user (U1 = Rahul)
+-----------------------------------------------------------------------
+
+    curl.exe -X POST http://localhost:8080/orders -H "Content-Type: application/json" -d '{\"orderId\":\"O-1\",\"userId\":\"U1\",\"item\":\"laptop\",\"amount\":55000}'
+
+EXPECTED — CURL RESPONSE (instant)
+    {"status":"QUEUED"}
+
+EXPECTED — ORDER-SERVICE LOG (the whole journey)
+    ... order-api      : API received order : {"orderId":"O-1","userId":"U1",...}
+    ... order-consumer : Consumed from Kafka : {"orderId":"O-1","userId":"U1",...}
+    ... order-consumer : User U1 EXISTS -> saving order O-1
+
+CHECK THE EXCEL SHEET:
+
+    Get-Content data\excel\orders.csv
+
+EXPECTED
+    O-1,U1,laptop,55000,2026-07-08 14:32:10
+
+Double-click data\excel\orders.csv -> opens in Excel, one order
+per row. THAT is the deliverable.
+
+-----------------------------------------------------------------------
+ TEST 2 : order from an UNKNOWN user (U9)
+-----------------------------------------------------------------------
+
+    curl.exe -X POST http://localhost:8080/orders -H "Content-Type: application/json" -d '{\"orderId\":\"O-2\",\"userId\":\"U9\",\"item\":\"phone\",\"amount\":20000}'
+
+EXPECTED — ORDER-SERVICE LOG
+    ... order-consumer : Consumed from Kafka : {"orderId":"O-2","userId":"U9",...}
+    ... order-consumer : User U9 NOT FOUND -> rejecting order O-2
+
+CHECK
+    Get-Content data\rejected\rejected.csv
+        -> O-2,U9,user not found
+
+    Get-Content data\excel\orders.csv
+        -> still only O-1 (the bad order did NOT get in)
+
+-----------------------------------------------------------------------
+ TEST 3 : three more good orders (watch the sheet grow)
+-----------------------------------------------------------------------
+
+    curl.exe -X POST http://localhost:8080/orders -H "Content-Type: application/json" -d '{\"orderId\":\"O-3\",\"userId\":\"U2\",\"item\":\"mouse\",\"amount\":500}'
+    curl.exe -X POST http://localhost:8080/orders -H "Content-Type: application/json" -d '{\"orderId\":\"O-4\",\"userId\":\"U3\",\"item\":\"monitor\",\"amount\":12000}'
+    curl.exe -X POST http://localhost:8080/orders -H "Content-Type: application/json" -d '{\"orderId\":\"O-5\",\"userId\":\"U1\",\"item\":\"keyboard\",\"amount\":1500}'
+
+    Get-Content data\excel\orders.csv
+
+EXPECTED
+    O-1,U1,laptop,55000,2026-07-08 14:32:10
+    O-3,U2,mouse,500,2026-07-08 14:35:02
+    O-4,U3,monitor,12000,2026-07-08 14:35:03
+    O-5,U1,keyboard,1500,2026-07-08 14:35:04
+
+-----------------------------------------------------------------------
+ TEST 4 : the decoupling proof (the microservice point!)
+-----------------------------------------------------------------------
+
+    1. STOP order-service (leave user-service and Kafka running)
+    2. You cannot POST now (port 8080 is down) — but publish straight
+       to the topic, pretending to be another system:
+
+    docker exec kafka /opt/kafka/bin/kafka-console-producer.sh --topic orders --bootstrap-server localhost:9092
+    (it waits for input — type this line and press Enter, then Ctrl+C:)
+    {"orderId":"O-6","userId":"U2","item":"cable","amount":300}
+
+    3. START order-service again.
+
+EXPECTED — shortly after startup, it processes the waiting message:
+    ... order-consumer : Consumed from Kafka : {"orderId":"O-6",...}
+    ... order-consumer : User U2 EXISTS -> saving order O-6
+
+SAY THIS: "The service was DOWN and the order still made it.
+Kafka held it. That is why microservices talk through topics."
+
+
+=======================================================================
+    IF SOMETHING GOES WRONG
+=======================================================================
+
+    SYMPTOM                              CAUSE -> FIX
+    -----------------------------------  --------------------------------
+    curl to 8080 refused                 order-service not running
+    curl to 8081 refused                 user-service not running
+    "QUEUED" returned but consumer       Kafka down (docker ps), or
+    never logs                           topic missing (Part A)
+    Consumer logs, then exception on     user-service not running ->
+    the toD call                         start it; with throwException
+                                         OnFailure=false a DOWN service
+                                         still throws (connection
+                                         refused is not a status code!)
+    Every order rejected                 wrong port in toD (8081?), or
+                                         userId not in the dummy map
+    ${body[userId]} empty                unmarshal missing, or headers
+                                         set AFTER the toD call
+    orders.csv has strange order         two consumers running? check
+                                         only ONE order-service instance
+    Port 8080/8081 already in use        another app on the port -> stop
+                                         it, or change server.port
+
+
+=======================================================================
+    FINAL CHECKLIST
+=======================================================================
+
+    [ ] user-service alone answers U1 (200) and U9 (404)
+    [ ] POST /orders returns {"status":"QUEUED"} instantly
+    [ ] Consumer log shows: Consumed -> EXISTS -> saved
+    [ ] orders.csv opens in Excel with one row per good order
+    [ ] rejected.csv holds the U9 order
+    [ ] Test 4: order survived while order-service was down
+
+ONE-SENTENCE SUMMARY
+    Two services never call each other directly for orders — the
+    order rides through Kafka, the consumer validates the user with
+    one REST call, and Camel turns the whole flow into ~40 lines.
+
+THE THREE IDEAS THIS DEMO PROVES
+    1. Topics decouple services  (Test 4 — down service, no loss)
+    2. Stash-in-headers idiom    (order fields survive the HTTP call)
+    3. A 404 is an answer, not an error
+                                 (throwExceptionOnFailure=false)
+
+RELATED
+    lab4-rest-to-kafka.txt           (the REST->Kafka half, in detail)
+    module-06-rest-apis.md           (REST DSL, path parameters)
+    camel-insurance-story.txt        (this same pattern at company scale)
