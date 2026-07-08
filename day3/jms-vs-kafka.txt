@@ -1,6 +1,4 @@
-I have formatted the comparison as a plain text document below. You can copy it into a file such as `kafka_vs_jms.txt`.
 
-```text
 Kafka vs JMS - Comparison
 
 ==================================================
