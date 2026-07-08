@@ -1,0 +1,197 @@
+========================================================
+ ADVANCED KAFKA MICROSERVICES PROJECT (SPRING BOOT)
+========================================================
+
+SYSTEM ARCHITECTURE:
+
+Customer Request
+      ↓
+Order Service (Producer)
+      ↓
+Kafka Topic: order-events
+      ↓
+--------------------------------------------------
+| Inventory Service   (Consumer Group A)         |
+| Payment Service     (Consumer Group B)         |
+| Notification Service (Consumer Group C)        |
+--------------------------------------------------
+
+========================================================
+1️⃣ CREATE KAFKA TOPIC
+========================================================
+
+kafka-topics --create \
+--topic order-events \
+--bootstrap-server localhost:9092 \
+--partitions 3 \
+--replication-factor 1
+
+========================================================
+2️⃣ COMMON DEPENDENCY (ALL SERVICES)
+========================================================
+
+Spring Boot Dependencies:
+- Spring Web
+- Spring Kafka
+- Lombok (optional)
+
+========================================================
+3️⃣ COMMON APPLICATION.YML (ALL SERVICES)
+========================================================
+
+spring:
+  kafka:
+    bootstrap-servers: localhost:9092
+
+========================================================
+4️⃣ COMMON DTO (SHARED EVENT)
+========================================================
+
+public class OrderEvent {
+
+    private int orderId;
+    private int customerId;
+    private double amount;
+    private String status;
+
+    // getters & setters
+}
+
+========================================================
+5️⃣ ORDER SERVICE (PRODUCER)
+========================================================
+
+ Controller
+--------------------------------------------------
+
+@RestController
+@RequestMapping("/orders")
+public class OrderController {
+
+    @Autowired
+    private KafkaTemplate<String, OrderEvent> kafkaTemplate;
+
+    private static final String TOPIC = "order-events";
+
+    @PostMapping
+    public String createOrder(@RequestBody OrderEvent event) {
+
+        event.setStatus("CREATED");
+
+        kafkaTemplate.send(
+            TOPIC,
+            String.valueOf(event.getOrderId()),
+            event
+        );
+
+        System.out.println("Order Event Published: " + event);
+
+        return "SUCCESS";
+    }
+}
+
+========================================================
+6️⃣ INVENTORY SERVICE (CONSUMER)
+========================================================
+
+@Service
+public class InventoryConsumer {
+
+    @KafkaListener(topics = "order-events", groupId = "inventory-group")
+    public void consume(OrderEvent event) {
+
+        System.out.println("INVENTORY SERVICE RECEIVED");
+
+        if ("CREATED".equals(event.getStatus())) {
+            System.out.println("Reducing stock for Order ID: " 
+                               + event.getOrderId());
+        }
+    }
+}
+
+========================================================
+7️⃣ PAYMENT SERVICE (CONSUMER)
+========================================================
+
+@Service
+public class PaymentConsumer {
+
+    @KafkaListener(topics = "order-events", groupId = "payment-group")
+    public void consume(OrderEvent event) {
+
+        System.out.println("PAYMENT SERVICE RECEIVED");
+
+        if ("CREATED".equals(event.getStatus())) {
+            System.out.println("Processing payment: " 
+                               + event.getAmount());
+        }
+    }
+}
+
+========================================================
+8️⃣ NOTIFICATION SERVICE (CONSUMER)
+========================================================
+
+@Service
+public class NotificationConsumer {
+
+    @KafkaListener(topics = "order-events", groupId = "notification-group")
+    public void consume(OrderEvent event) {
+
+        System.out.println("NOTIFICATION SERVICE RECEIVED");
+
+        System.out.println("Sending email for Order ID: " 
+                           + event.getOrderId());
+    }
+}
+
+========================================================
+9️⃣ FLOW OF SYSTEM
+========================================================
+
+POSTMAN REQUEST
+      ↓
+Order Service
+      ↓
+Kafka Topic (order-events)
+      ↓
+--------------------------------------------------
+Inventory Service   → Update Stock
+Payment Service     → Process Payment
+Notification Service → Send Email/SMS
+--------------------------------------------------
+
+========================================================
+🔟 TEST API
+========================================================
+
+POST:
+http://localhost:8080/orders
+
+BODY:
+{
+  "orderId": 101,
+  "customerId": 1,
+  "amount": 2500,
+  "status": "CREATED"
+}
+
+========================================================
+ KEY LEARNINGS
+========================================================
+
+✔ Event-driven architecture
+✔ Microservices decoupling
+✔ Kafka Producer & Consumer
+✔ Consumer groups concept
+✔ Real-time processing
+✔ Horizontal scalability
+
+========================================================
+ Tips
+========================================================
+
+"We used Kafka to decouple microservices using an
+event-driven architecture where each service consumes
+events independently using consumer groups."
+========================================================

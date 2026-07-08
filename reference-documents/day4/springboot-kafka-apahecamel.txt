@@ -1,0 +1,601 @@
+====================================================================
+COMPLETE DEMO : SPRING BOOT + APACHE CAMEL + APACHE KAFKA
+(Eclipse + Maven + Kafka Complete Notes)
+====================================================================
+
+Prerequisites
+-------------
+
+1. Java 17
+2. Eclipse IDE
+3. Maven
+4. Apache Kafka
+5. Apache Zookeeper (For Kafka 3.x and below)
+6. Spring Boot
+7. Apache Camel
+
+Verify Installation
+-------------------
+
+java -version
+
+mvn -version
+
+kafka-topics.bat --version
+
+or
+
+kafka-topics.sh --version
+
+
+====================================================================
+WHAT IS APACHE CAMEL?
+====================================================================
+
+Apache Camel is an Integration Framework used to connect different
+applications using Enterprise Integration Patterns (EIP).
+
+Example:
+
+REST API
+   |
+Apache Camel
+   |
+Kafka
+   |
+Database
+   |
+Email
+   |
+Another Application
+
+
+====================================================================
+WHAT IS APACHE KAFKA?
+====================================================================
+
+Apache Kafka is a Distributed Message Broker.
+
+Producer  ---> Kafka Topic ---> Consumer
+
+Messages are stored inside Topics.
+
+Example:
+
+Order Service
+      |
+      V
+   order-topic
+      |
+      V
+Notification Service
+
+
+====================================================================
+PROJECT ARCHITECTURE
+====================================================================
+
+Spring Boot REST API
+
+        |
+
+Apache Camel Route
+
+        |
+
+Kafka Producer
+
+        |
+
+Kafka Topic
+
+        |
+
+Kafka Consumer
+
+        |
+
+Console Output
+
+
+====================================================================
+STEP 1 : CREATE SPRING BOOT PROJECT
+====================================================================
+
+Open Eclipse
+
+File
+
+New
+
+Spring Starter Project
+
+Project Name
+
+CamelKafkaDemo
+
+Dependencies
+
+Spring Web
+
+Spring Boot DevTools
+
+
+====================================================================
+STEP 2 : ADD MAVEN DEPENDENCIES
+====================================================================
+
+Add inside pom.xml
+
+------------------------------------------------------------
+
+<dependencies>
+
+    <!-- Spring Boot -->
+
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+
+    <!-- Apache Camel Spring Boot -->
+
+    <dependency>
+        <groupId>org.apache.camel.springboot</groupId>
+        <artifactId>camel-spring-boot-starter</artifactId>
+        <version>4.6.0</version>
+    </dependency>
+
+    <!-- Camel Kafka -->
+
+    <dependency>
+        <groupId>org.apache.camel</groupId>
+        <artifactId>camel-kafka</artifactId>
+        <version>4.6.0</version>
+    </dependency>
+
+</dependencies>
+
+
+Save Project
+
+Maven downloads dependencies automatically.
+
+
+====================================================================
+STEP 3 : CREATE MAIN APPLICATION
+====================================================================
+
+package com.example.demo;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class CamelKafkaDemoApplication {
+
+    public static void main(String[] args) {
+
+        SpringApplication.run(CamelKafkaDemoApplication.class,args);
+
+    }
+
+}
+
+
+====================================================================
+STEP 4 : CREATE REST CONTROLLER
+====================================================================
+
+Package
+
+controller
+
+Create
+
+MessageController.java
+
+------------------------------------------------------------
+
+package com.example.demo.controller;
+
+import org.apache.camel.ProducerTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+
+@RequestMapping("/message")
+
+public class MessageController {
+
+    @Autowired
+    ProducerTemplate producerTemplate;
+
+    @PostMapping("/{msg}")
+
+    public String send(@PathVariable String msg){
+
+        producerTemplate.sendBody("direct:start",msg);
+
+        return "Message Sent : " + msg;
+
+    }
+
+}
+
+------------------------------------------------------------
+
+
+====================================================================
+STEP 5 : CREATE CAMEL ROUTE
+====================================================================
+
+Package
+
+route
+
+Create
+
+KafkaRoute.java
+
+------------------------------------------------------------
+
+package com.example.demo.route;
+
+import org.apache.camel.builder.RouteBuilder;
+import org.springframework.stereotype.Component;
+
+@Component
+
+public class KafkaRoute extends RouteBuilder {
+
+    @Override
+
+    public void configure() {
+
+        from("direct:start")
+
+        .log("Received Message : ${body}")
+
+        .to("kafka:demo-topic?brokers=localhost:9092");
+
+
+        from("kafka:demo-topic?brokers=localhost:9092")
+
+        .log("Kafka Consumer Received : ${body}");
+
+    }
+
+}
+
+------------------------------------------------------------
+
+
+====================================================================
+STEP 6 : application.properties
+====================================================================
+
+server.port=8080
+
+camel.springboot.main-run-controller=true
+
+
+====================================================================
+STEP 7 : START KAFKA
+====================================================================
+
+Start Zookeeper
+
+Windows
+
+bin\windows\zookeeper-server-start.bat config\zookeeper.properties
+
+
+Linux
+
+bin/zookeeper-server-start.sh config/zookeeper.properties
+
+
+Start Kafka Server
+
+Windows
+
+bin\windows\kafka-server-start.bat config\server.properties
+
+
+Linux
+
+bin/kafka-server-start.sh config/server.properties
+
+
+====================================================================
+STEP 8 : CREATE KAFKA TOPIC
+====================================================================
+
+Windows
+
+bin\windows\kafka-topics.bat --create --topic demo-topic --bootstrap-server localhost:9092
+
+
+Linux
+
+bin/kafka-topics.sh --create --topic demo-topic --bootstrap-server localhost:9092
+
+
+List Topics
+
+bin\windows\kafka-topics.bat --list --bootstrap-server localhost:9092
+
+
+====================================================================
+STEP 9 : RUN SPRING BOOT APPLICATION
+====================================================================
+
+Run As
+
+Spring Boot App
+
+
+Console
+
+Started CamelKafkaDemoApplication
+
+
+====================================================================
+STEP 10 : TEST API
+====================================================================
+
+POST
+
+http://localhost:8080/message/Hello
+
+
+Response
+
+Message Sent : Hello
+
+
+Console Output
+
+Received Message : Hello
+
+Kafka Consumer Received : Hello
+
+
+====================================================================
+PROJECT STRUCTURE
+====================================================================
+
+CamelKafkaDemo
+
+src/main/java
+
+com.example.demo
+
+        CamelKafkaDemoApplication.java
+
+        controller
+
+                MessageController.java
+
+        route
+
+                KafkaRoute.java
+
+
+application.properties
+
+pom.xml
+
+
+====================================================================
+FLOW DIAGRAM
+====================================================================
+
+Client
+
+   |
+
+POST /message/Hello
+
+   |
+
+Spring Boot REST API
+
+   |
+
+ProducerTemplate
+
+   |
+
+Apache Camel Route
+
+   |
+
+Kafka Producer
+
+   |
+
+demo-topic
+
+   |
+
+Kafka Consumer
+
+   |
+
+Console
+
+
+====================================================================
+COMMON KAFKA COMMANDS
+====================================================================
+
+Create Topic
+
+kafka-topics.bat --create --topic demo-topic --bootstrap-server localhost:9092
+
+
+List Topics
+
+kafka-topics.bat --list --bootstrap-server localhost:9092
+
+
+Delete Topic
+
+kafka-topics.bat --delete --topic demo-topic --bootstrap-server localhost:9092
+
+
+Describe Topic
+
+kafka-topics.bat --describe --topic demo-topic --bootstrap-server localhost:9092
+
+
+Produce Messages
+
+kafka-console-producer.bat --topic demo-topic --bootstrap-server localhost:9092
+
+
+Consume Messages
+
+kafka-console-consumer.bat --topic demo-topic --from-beginning --bootstrap-server localhost:9092
+
+
+====================================================================
+COMMON MAVEN COMMANDS
+====================================================================
+
+mvn clean
+
+mvn compile
+
+mvn package
+
+mvn spring-boot:run
+
+
+====================================================================
+COMMON SPRING BOOT ENDPOINT
+====================================================================
+
+POST
+
+/message/Hello
+
+
+Response
+
+Message Sent : Hello
+
+
+====================================================================
+END TO END FLOW
+====================================================================
+
+Create Spring Boot Project
+
+        |
+
+Add Camel Dependency
+
+        |
+
+Add Kafka Dependency
+
+        |
+
+Create REST Controller
+
+        |
+
+Create Camel Route
+
+        |
+
+Start Zookeeper
+
+        |
+
+Start Kafka
+
+        |
+
+Create Kafka Topic
+
+        |
+
+Run Spring Boot Application
+
+        |
+
+Call REST API
+
+        |
+
+Apache Camel Receives Message
+
+        |
+
+Camel Sends Message To Kafka
+
+        |
+
+Kafka Stores Message
+
+        |
+
+Kafka Consumer Reads Message
+
+        |
+
+Display Output On Console
+
+
+====================================================================
+EXPECTED OUTPUT
+====================================================================
+
+POST
+
+http://localhost:8080/message/HelloWorld
+
+
+REST Response
+
+Message Sent : HelloWorld
+
+
+Spring Console
+
+Received Message : HelloWorld
+
+Kafka Consumer Received : HelloWorld
+
+
+====================================================================
+SUMMARY
+====================================================================
+
+Spring Boot
+    -> Creates REST API
+
+Apache Camel
+    -> Routes Messages
+
+Kafka Producer
+    -> Publishes Messages
+
+Kafka Topic
+    -> Stores Messages
+
+Kafka Consumer
+    -> Reads Messages
+
+Console
+    -> Displays Received Messages
+
+====================================================================
+END OF NOTES
+====================================================================
+```

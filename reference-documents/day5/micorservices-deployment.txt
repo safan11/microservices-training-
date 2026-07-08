@@ -1,0 +1,694 @@
+===========================================================
+SPRING BOOT USER & ORDER MICROSERVICES WITH KUBERNETES
+(Eclipse + Docker + Kubernetes Complete Notes)
+===========================================================
+
+Prerequisites
+-------------
+1. Java 17
+2. Eclipse IDE
+3. Maven
+4. Docker Desktop
+5. Kubernetes (Docker Desktop Kubernetes or Minikube)
+6. kubectl
+
+Verify Installation
+-------------------
+
+java -version
+
+mvn -version
+
+docker --version
+
+kubectl version --client
+
+kubectl get nodes
+
+
+===========================================================
+STEP 1 : CREATE USER SERVICE
+===========================================================
+
+Open Eclipse
+
+File -> New -> Spring Starter Project
+
+Project Name:
+-------------
+UserService
+
+Dependencies:
+-------------
+Spring Web
+Spring Boot DevTools
+
+Package Structure
+-----------------
+
+src/main/java
+
+com.example.user
+
+        UserServiceApplication.java
+
+        controller
+              UserController.java
+
+
+-----------------------------------------------------------
+UserServiceApplication.java
+-----------------------------------------------------------
+
+package com.example.user;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class UserServiceApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(UserServiceApplication.class, args);
+    }
+
+}
+
+
+-----------------------------------------------------------
+UserController.java
+-----------------------------------------------------------
+
+package com.example.user.controller;
+
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/users")
+public class UserController {
+
+    @GetMapping
+    public String getUsers() {
+        return "All Users";
+    }
+
+    @GetMapping("/{id}")
+    public String getUser(@PathVariable int id) {
+        return "User ID : " + id;
+    }
+
+    @PostMapping
+    public String saveUser() {
+        return "User Saved";
+    }
+
+}
+
+-----------------------------------------------------------
+application.properties
+-----------------------------------------------------------
+
+server.port=8081
+
+Run As
+------
+
+Spring Boot App
+
+Test
+
+http://localhost:8081/users
+
+Output
+
+All Users
+
+
+===========================================================
+STEP 2 : CREATE ORDER SERVICE
+===========================================================
+
+Create another Spring Starter Project
+
+Project Name
+
+OrderService
+
+Dependency
+
+Spring Web
+
+
+-----------------------------------------------------------
+OrderServiceApplication.java
+-----------------------------------------------------------
+
+package com.example.order;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class OrderServiceApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(OrderServiceApplication.class, args);
+    }
+
+}
+
+
+-----------------------------------------------------------
+OrderController.java
+-----------------------------------------------------------
+
+package com.example.order.controller;
+
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/orders")
+public class OrderController {
+
+    @GetMapping
+    public String getOrders() {
+        return "All Orders";
+    }
+
+    @GetMapping("/{id}")
+    public String getOrder(@PathVariable int id) {
+        return "Order ID : " + id;
+    }
+
+    @PostMapping
+    public String saveOrder() {
+        return "Order Saved";
+    }
+
+}
+
+
+-----------------------------------------------------------
+application.properties
+-----------------------------------------------------------
+
+server.port=8082
+
+Run
+
+http://localhost:8082/orders
+
+Output
+
+All Orders
+
+
+===========================================================
+REST ENDPOINTS
+===========================================================
+
+USER SERVICE
+
+GET
+
+/users
+
+Response
+
+All Users
+
+
+GET
+
+/users/1
+
+Response
+
+User ID : 1
+
+
+POST
+
+/users
+
+Response
+
+User Saved
+
+
+ORDER SERVICE
+
+GET
+
+/orders
+
+Response
+
+All Orders
+
+
+GET
+
+/orders/10
+
+Response
+
+Order ID : 10
+
+
+POST
+
+/orders
+
+Response
+
+Order Saved
+
+
+===========================================================
+BUILD PROJECTS
+===========================================================
+
+For User Service
+
+cd UserService
+
+mvn clean package
+
+
+For Order Service
+
+cd OrderService
+
+mvn clean package
+
+
+Generated JAR
+
+target/UserService.jar
+
+target/OrderService.jar
+
+
+===========================================================
+DOCKERFILE
+===========================================================
+
+Create Dockerfile inside both projects
+
+FROM eclipse-temurin:17-jdk
+
+COPY target/*.jar app.jar
+
+ENTRYPOINT ["java","-jar","/app.jar"]
+
+
+===========================================================
+BUILD DOCKER IMAGES
+===========================================================
+
+User Service
+
+docker build -t userservice:v1 .
+
+Order Service
+
+docker build -t orderservice:v1 .
+
+
+Run Images
+
+docker run -p 8081:8081 userservice:v1
+
+docker run -p 8082:8082 orderservice:v1
+
+
+===========================================================
+OPTIONAL : PUSH TO DOCKER HUB
+===========================================================
+
+docker login
+
+docker tag userservice:v1 yourdockerhub/userservice:v1
+
+docker push yourdockerhub/userservice:v1
+
+
+docker tag orderservice:v1 yourdockerhub/orderservice:v1
+
+docker push yourdockerhub/orderservice:v1
+
+
+===========================================================
+KUBERNETES YAML FILES
+===========================================================
+
+Create folder
+
+k8s
+
+Inside it create
+
+user-configmap.yaml
+
+user-deployment.yaml
+
+user-service.yaml
+
+order-configmap.yaml
+
+order-deployment.yaml
+
+order-service.yaml
+
+
+===========================================================
+user-configmap.yaml
+===========================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: user-config
+data:
+  APP_NAME: UserService
+
+
+===========================================================
+user-deployment.yaml
+===========================================================
+
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: user-deployment
+
+spec:
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: user
+
+  template:
+
+    metadata:
+      labels:
+        app: user
+
+    spec:
+
+      containers:
+      - name: user
+
+        image: userservice:v1
+
+        imagePullPolicy: Never
+
+        ports:
+        - containerPort: 8081
+
+        env:
+        - name: APP_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: user-config
+              key: APP_NAME
+
+
+===========================================================
+user-service.yaml
+===========================================================
+
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: user-service
+
+spec:
+
+  selector:
+    app: user
+
+  ports:
+  - port: 8081
+    targetPort: 8081
+
+  type: NodePort
+
+
+===========================================================
+order-configmap.yaml
+===========================================================
+
+apiVersion: v1
+kind: ConfigMap
+
+metadata:
+  name: order-config
+
+data:
+  APP_NAME: OrderService
+
+
+===========================================================
+order-deployment.yaml
+===========================================================
+
+apiVersion: apps/v1
+kind: Deployment
+
+metadata:
+  name: order-deployment
+
+spec:
+
+  replicas: 2
+
+  selector:
+    matchLabels:
+      app: order
+
+  template:
+
+    metadata:
+      labels:
+        app: order
+
+    spec:
+
+      containers:
+      - name: order
+
+        image: orderservice:v1
+
+        imagePullPolicy: Never
+
+        ports:
+        - containerPort: 8082
+
+        env:
+        - name: APP_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: order-config
+              key: APP_NAME
+
+
+===========================================================
+order-service.yaml
+===========================================================
+
+apiVersion: v1
+kind: Service
+
+metadata:
+  name: order-service
+
+spec:
+
+  selector:
+    app: order
+
+  ports:
+  - port: 8082
+    targetPort: 8082
+
+  type: NodePort
+
+
+===========================================================
+DEPLOY TO KUBERNETES
+===========================================================
+
+Go to k8s folder
+
+cd k8s
+
+Deploy all YAML files
+
+kubectl apply -f .
+
+
+Expected Output
+
+configmap created
+
+deployment created
+
+service created
+
+
+===========================================================
+VERIFY DEPLOYMENT
+===========================================================
+
+Check Pods
+
+kubectl get pods
+
+
+Check Deployments
+
+kubectl get deployments
+
+
+Check Services
+
+kubectl get services
+
+
+Check ConfigMaps
+
+kubectl get configmaps
+
+
+Describe Pod
+
+kubectl describe pod <pod-name>
+
+
+View Logs
+
+kubectl logs <pod-name>
+
+
+Open Shell inside Pod
+
+kubectl exec -it <pod-name> -- sh
+
+
+===========================================================
+SCALING
+===========================================================
+
+Increase replicas
+
+kubectl scale deployment user-deployment --replicas=4
+
+Verify
+
+kubectl get pods
+
+
+===========================================================
+RESTART DEPLOYMENT
+===========================================================
+
+kubectl rollout restart deployment user-deployment
+
+Check Status
+
+kubectl rollout status deployment user-deployment
+
+
+===========================================================
+DELETE RESOURCES
+===========================================================
+
+Delete One Deployment
+
+kubectl delete deployment user-deployment
+
+
+Delete One Service
+
+kubectl delete service user-service
+
+
+Delete Everything
+
+kubectl delete -f .
+
+
+===========================================================
+COMMON KUBECTL COMMANDS
+===========================================================
+
+kubectl get nodes
+
+kubectl get pods
+
+kubectl get deployments
+
+kubectl get services
+
+kubectl get configmaps
+
+kubectl describe pod <pod-name>
+
+kubectl logs <pod-name>
+
+kubectl exec -it <pod-name> -- sh
+
+kubectl scale deployment user-deployment --replicas=3
+
+kubectl rollout restart deployment user-deployment
+
+kubectl delete -f .
+
+kubectl apply -f .
+
+
+===========================================================
+COMPLETE FLOW
+===========================================================
+
+Create Spring Boot Project
+          |
+          V
+Develop REST APIs
+          |
+          V
+Run in Eclipse
+          |
+          V
+mvn clean package
+          |
+          V
+Create Docker Image
+          |
+          V
+Run Docker Container
+          |
+          V
+Create Kubernetes YAML Files
+          |
+          V
+kubectl apply -f .
+          |
+          V
+kubectl get pods
+          |
+          V
+kubectl get services
+          |
+          V
+kubectl logs <pod-name>
+          |
+          V
+Test REST APIs
+
+
