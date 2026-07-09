@@ -1,0 +1,714 @@
+=======================================================================
+
+    APACHE CAMEL — 30 CORE CONCEPTS, EACH WITH A CODE EXAMPLE
+    (simple language + real code for every single concept)
+
+=======================================================================
+
+HOW TO READ THIS FILE
+    Every concept has the same shape:
+
+        WHAT     = meaning in 1-2 lines
+        EXAMPLE  = real Camel code you can type
+        NOTE     = the one thing people get wrong / remember
+
+    All examples are Java DSL inside a Spring Boot RouteBuilder:
+
+        @Component
+        public class MyRoute extends RouteBuilder {
+            @Override
+            public void configure() throws Exception {
+                // examples go here
+            }
+        }
+
+
+=======================================================================
+    0. WHAT IS CAMEL  (30 seconds)
+=======================================================================
+
+Camel is an INTEGRATION FRAMEWORK — a postman between systems.
+
+        Application A  --->  CAMEL  --->  Application B
+                       receive, transform, route, deliver
+
+Without Camel: every service hand-writes HTTP code, Kafka code,
+file code, retry code, logging — duplicated everywhere.
+
+With Camel: 300+ ready connectors. You only declare:
+FROM where -> what happens -> TO where.
+
+Camel does not replace Java. Camel is a Java framework:
+Java = business logic, Camel = integration plumbing
+.
+
+=======================================================================
+    1. ROUTE  — the heart of Camel
+=======================================================================
+
+WHAT
+    One complete flow: FROM a source, through steps, TO a target.
+    Like Google Maps: start point -> road -> destination.
+
+EXAMPLE
+
+    from("file:data/input")            // start point
+        .log("got ${file:name}")       // road
+        .to("file:data/output");       // destination
+
+NOTE
+    Every route has exactly ONE from(). As many to() as you need.
+
+
+=======================================================================
+    2. ROUTE ID  — name your route
+=======================================================================
+
+WHAT
+    A unique, human name for the route. Used in every log line,
+    for monitoring, and to start/stop routes in production.
+
+EXAMPLE
+
+    from("file:data/input")
+        .routeId("customer-file-route")     // <-- always add this
+        .to("file:data/output");
+
+NOTE
+    Without it Camel invents "route1, route2..." — useless at 3 a.m.
+    First line after from(), every route, no exceptions.
+
+
+=======================================================================
+    3. ENDPOINT  — a source or destination
+=======================================================================
+
+WHAT
+    Any place a message comes FROM or goes TO:
+    file, REST API, Kafka, queue, database, FTP, email...
+
+EXAMPLE
+
+    from("file:data/orders")        // endpoint 1 (source)
+        .to("kafka:orders");        // endpoint 2 (destination)
+
+NOTE
+    from() endpoint = CONSUMER (listens/reads).
+    to() endpoint   = PRODUCER (sends/writes).
+
+
+=======================================================================
+    4. COMPONENT  — the ready-made connector
+=======================================================================
+
+WHAT
+    The connector that understands one protocol. 300+ exist:
+    file, http, kafka, jms, ftp, sql, mail, aws2-s3, salesforce...
+    You never write connection code — the component has it.
+
+EXAMPLE
+
+    to("kafka:orders")
+    // "kafka" = the component. It handles brokers, serialization,
+    // batching, reconnects. Your route stays one line.
+
+NOTE
+    Each component = one dependency (starter) in pom.xml:
+    camel-kafka-starter, camel-ftp-starter, ...
+
+
+=======================================================================
+    5. URI  — the address
+=======================================================================
+
+WHAT
+    The string inside from()/to(). Always the same shape:
+
+        component : path ? option=value & option=value
+        ---------   ----   ---------------------------
+        WHICH       WHERE  HOW
+        connector   exactly
+
+EXAMPLE
+
+    from("file:data/input?delete=true&include=.*\\.csv")
+    //    ----  ----------  -----------  --------------
+    //    file  the folder  delete after  only csv files
+    //    comp.             processing
+
+NOTE
+    Option names are checked at startup. A typo = app fails fast
+    with "Unknown parameters" — that is a feature.
+
+
+=======================================================================
+    6. EXCHANGE  — the envelope
+=======================================================================
+
+WHAT
+    The container that travels through the route.
+    Inside it: Message (body + headers) and Properties.
+
+EXAMPLE
+
+    .process(exchange -> {
+        String body = exchange.getIn().getBody(String.class);
+        String id   = exchange.getIn().getHeader("customerId", String.class);
+        System.out.println("body=" + body + " customer=" + id);
+    })
+
+NOTE
+    exchange.getIn() = the current message. Everything you do in
+    Camel is reading/changing this envelope.
+
+
+=======================================================================
+    7. MESSAGE BODY  — the actual data
+=======================================================================
+
+WHAT
+    The payload: JSON, XML, CSV text, a POJO, bytes of a PDF...
+    Most processing happens on the body.
+
+EXAMPLE
+
+    .setBody(constant("hello"))                 // replace body
+    .log("body is: ${body}")                    // read body in logs
+    .process(e -> {
+        String b = e.getIn().getBody(String.class);   // read in Java
+        e.getIn().setBody(b.toUpperCase());           // write in Java
+    })
+
+NOTE
+    getBody(String.class) also CONVERTS (file stream -> String).
+    Camel's type converters do this everywhere.
+
+
+=======================================================================
+    8. HEADERS  — info ABOUT the data
+=======================================================================
+
+WHAT
+    Key-value metadata riding on the message: file name, customer
+    id, content type... Used for decisions and file/queue names.
+
+EXAMPLE
+
+    .setHeader("customerId", simple("${body[custId]}"))
+    .log("processing customer ${header.customerId}")
+    .to("file:data/out?fileName=cust-${header.customerId}.json")
+
+NOTE
+    THE golden idiom: stash values into headers BEFORE you
+    transform the body — headers survive, the old body does not.
+
+
+=======================================================================
+    9. PROPERTIES  — route-lifetime storage
+=======================================================================
+
+WHAT
+    Like headers, but they live on the EXCHANGE for the whole
+    route — they survive things that replace the message
+    (like calling an HTTP service).
+
+EXAMPLE
+
+    .setProperty("rawInput", body())          // save original
+    .to("http://validator:8081/check")        // body replaced by reply!
+    .log("reply=${body}, original=${exchangeProperty.rawInput}")
+
+NOTE
+    Headers may be dropped by some components when crossing
+    systems; properties never leave your route. Original-input
+    backup = property.
+
+
+=======================================================================
+    10. PROCESSOR  — your own Java inside the flow
+=======================================================================
+
+WHAT
+    A step with custom Java code: validate, calculate, modify.
+
+EXAMPLE
+
+    .process(exchange -> {
+        int amount = exchange.getIn().getHeader("amount", Integer.class);
+        exchange.getIn().setHeader("tax", amount * 18 / 100);
+    })
+    .log("tax = ${header.tax}")
+
+NOTE
+    Keep processors SMALL. Big business logic belongs in a Bean
+    (next concept).
+
+
+=======================================================================
+    11. BEAN  — call a normal Java class
+=======================================================================
+
+WHAT
+    Instead of writing logic inside the route, call a method on a
+    Spring bean. Camel passes the body as the argument and takes
+    the return value as the new body.
+
+EXAMPLE
+
+    // normal Spring class:
+    @Service
+    public class PriceService {
+        public Order addTax(Order order) { ...; return order; }
+    }
+
+    // in the route:
+    .bean(PriceService.class, "addTax")
+
+NOTE
+    Best practice split:  Camel = integration,  Bean = business
+    logic. Beans are unit-testable without Camel.
+
+
+=======================================================================
+    12. DIRECT  — connect two routes (same app)
+=======================================================================
+
+WHAT
+    An in-memory wire between routes. No network. Synchronous:
+    the caller waits for the called route to finish.
+
+EXAMPLE
+
+    from("file:data/orders")
+        .routeId("intake")
+        .to("direct:payment");            // hand over
+
+    from("direct:payment")
+        .routeId("payment")
+        .log("paying for ${file:name}");
+
+NOTE
+    Same name on both sides = connected. Use it to split one big
+    route into small reusable ones.
+
+
+=======================================================================
+    13. CHOICE  — if / else for messages
+=======================================================================
+
+WHAT
+    Route a message down different paths based on content.
+
+EXAMPLE
+
+    .choice()
+        .when(simple("${header.amount} > 10000"))
+            .log("manager approval needed")
+            .to("direct:approval")
+        .otherwise()
+            .log("auto approved")
+            .to("direct:process")
+    .end();
+
+NOTE
+    First matching when() wins. Always close with .end().
+    Always consider an otherwise() — messages must go SOMEWHERE.
+
+
+=======================================================================
+    14. FILTER  — drop what you don't want
+=======================================================================
+
+WHAT
+    Only matching messages continue; the rest silently stop.
+
+EXAMPLE
+
+    .filter(simple("${body[type]} == 'PREMIUM'"))
+        .log("premium customer: ${body[name]}")
+        .to("kafka:premium-customers")
+    .end();
+
+NOTE
+    Filter DROPS silently. If you need to see/keep the rejected
+    ones, use choice + otherwise instead.
+
+
+=======================================================================
+    15. SPLIT  — one message becomes many
+=======================================================================
+
+WHAT
+    A message containing a list becomes one exchange per element.
+
+EXAMPLE
+
+    // body = JSON array of 100 products
+    .unmarshal().json(JsonLibrary.Jackson, List.class)
+    .split(body())
+        .log("product ${exchangeProperty.CamelSplitIndex}: ${body[name]}")
+        .to("kafka:products")
+    .end();
+
+NOTE
+    CamelSplitIndex counts 0,1,2... Inside the split block you can
+    do anything a normal route does.
+
+
+=======================================================================
+    16. AGGREGATE  — many messages become one
+=======================================================================
+
+WHAT
+    Opposite of split: collect messages into one combined message.
+
+EXAMPLE
+
+    .aggregate(constant(true), AggregationStrategies.groupedBody())
+        .completionSize(10)          // release after 10 messages
+        .completionTimeout(5000)     // ...or after 5 s, whichever first
+    .log("batch of 10: ${body}")
+    .to("file:data/batches");
+
+NOTE
+    constant(true) = one group for everything. Real systems group
+    by e.g. simple("${header.customerId}"). Split + Aggregate
+    together = the OSB Split-Join.
+
+
+=======================================================================
+    17. MULTICAST  — same message to several destinations
+=======================================================================
+
+WHAT
+    Copy the message to multiple endpoints, one after another
+    (or parallel).
+
+EXAMPLE
+
+    .multicast()
+        .to("direct:saveDb", "direct:sendKafka", "direct:sendMail")
+    .end();
+
+NOTE
+    All three get the SAME message. Add .parallelProcessing()
+    to send simultaneously.
+
+
+=======================================================================
+    18. WIRETAP  — audit copy, fire and forget
+=======================================================================
+
+WHAT
+    Send a COPY of the message aside without slowing or changing
+    the main flow.
+
+EXAMPLE
+
+    from("file:data/orders")
+        .wireTap("file:data/audit")     // copy goes here, async
+        .to("direct:mainProcessing");   // main flow never waited
+
+NOTE
+    Multicast = everyone matters. WireTap = a side copy nobody
+    waits for (logging, audit, archive).
+
+
+=======================================================================
+    19. EXCEPTION HANDLING  — when things fail
+=======================================================================
+
+WHAT
+    Catch errors, decide what happens: log, redirect, reply.
+
+EXAMPLE
+
+    onException(JsonProcessingException.class)
+        .handled(true)                       // do not rethrow
+        .log("bad JSON: ${exception.message}")
+        .to("file:data/error");
+
+    from("file:data/input")
+        .unmarshal().json(JsonLibrary.Jackson)
+        .to("kafka:orders");
+
+NOTE
+    Put onException at the TOP of configure(). handled(true) =
+    the error branch's result becomes the outcome; no stack trace
+    spam.
+
+
+=======================================================================
+    20. RETRY  — try again automatically
+=======================================================================
+
+WHAT
+    On failure, redeliver the message N times with a delay —
+    no custom code.
+
+EXAMPLE
+
+    onException(HttpOperationFailedException.class)
+        .maximumRedeliveries(3)         // 3 retries = 4 total tries
+        .redeliveryDelay(2000)          // 2 s between tries
+        .backOffMultiplier(2)           // 2s, 4s, 8s (optional)
+        .handled(true)
+        .to("direct:failed");
+
+NOTE
+    Retry helps for TEMPORARY problems (network blip). A broken
+    message stays broken — retrying it 100 times won't fix JSON.
+    That is what DLQ is for.
+
+
+=======================================================================
+    21. DEAD LETTER QUEUE (DLQ)  — nothing gets lost
+=======================================================================
+
+WHAT
+    After all retries fail, park the message in a safe place
+    (queue or folder) for humans to inspect. Flow continues.
+
+EXAMPLE
+
+    errorHandler(deadLetterChannel("kafka:orders-dlq")
+        .maximumRedeliveries(3)
+        .redeliveryDelay(1000));
+
+    from("kafka:orders")
+        .to("direct:process");    // fails 4x -> message -> orders-dlq
+
+NOTE
+    The production rule: every message must END somewhere you can
+    look at — output, or DLQ. Never nowhere.
+
+
+=======================================================================
+    22. SCHEDULER  — run routes on a clock
+=======================================================================
+
+WHAT
+    Start a route every minute / hour / day — batch jobs.
+
+EXAMPLE
+
+    // simple interval:
+    from("timer:cleanup?period=60000")              // every minute
+        .routeId("cleanup-job")
+        .log("cleaning at ${date:now:HH:mm:ss}");
+
+    // real cron (needs camel-quartz-starter):
+    from("quartz:reports?cron=0+0+2+*+*+?")         // daily 02:00
+        .routeId("nightly-report")
+        .to("direct:buildReport");
+
+NOTE
+    timer = simple intervals. quartz = cron expressions.
+    Timer messages have an EMPTY body — they are just a trigger.
+
+
+=======================================================================
+    23. TRANSFORMATION  — convert data formats
+=======================================================================
+
+WHAT
+    JSON <-> Java <-> XML <-> CSV. The two verbs:
+        unmarshal = text  -> Java object   (to work with it)
+        marshal   = Java  -> text          (to send it)
+
+EXAMPLE
+
+    from("file:data/csv-in")
+        .unmarshal().csv()                          // CSV -> Java lists
+        .marshal().json(JsonLibrary.Jackson)        // Java -> JSON
+        .to("file:data/json-out");
+
+NOTE
+    Each format = one small dependency (camel-jackson-starter,
+    camel-csv-starter...). Memory hook: UNwrap into Java, MAKE
+    text again.
+
+
+=======================================================================
+    24. VALIDATION  — reject bad data early
+=======================================================================
+
+WHAT
+    Check the message; stop or redirect invalid ones.
+
+EXAMPLE
+
+    .choice()
+        .when(simple("${body[customerId]} == null || ${body[amount]} <= 0"))
+            .log("INVALID order rejected: ${body}")
+            .to("file:data/rejected")
+        .otherwise()
+            .to("direct:process")
+    .end();
+
+NOTE
+    Validate at the START of the route — fail fast, before you
+    touch databases or queues. Invalid data goes to a visible
+    place, never silently dropped.
+
+
+=======================================================================
+    25. LOGGING  — see what is happening
+=======================================================================
+
+WHAT
+    Print message info at any step. Your main debugging tool.
+
+EXAMPLE
+
+    .log("received ${file:name}")                          // short form
+    .log(LoggingLevel.WARN, "big order: ${header.amount}") // with level
+    .to("log:debug?showHeaders=true")                      // full detail
+
+NOTE
+    Debug trick: put to("log:x?showHeaders=true") right before
+    the failing step — you usually see the problem immediately.
+
+
+=======================================================================
+    26. REST DSL  — expose your route as an HTTP API
+=======================================================================
+
+WHAT
+    Camel becomes the REST server (on Spring Boot's port 8080).
+    No @RestController needed.
+
+EXAMPLE
+
+    rest("/customers")
+        .post().to("direct:saveCustomer")
+        .get("/{id}").to("direct:getCustomer");
+
+    from("direct:saveCustomer")
+        .log("saving: ${body}")
+        .to("kafka:customers");
+
+NOTE
+    Needs camel-platform-http-starter. Path parameter {id}
+    arrives as header("id"). Whatever the body is at the END of
+    the route = the HTTP response.
+
+
+=======================================================================
+    27. MICROSERVICES  — Camel between services
+=======================================================================
+
+WHAT
+    Camel routes are the doors of each microservice: receive REST,
+    call other services, publish events.
+
+EXAMPLE
+
+    from("direct:createOrder")
+        .setProperty("order", body())
+        .toD("http://customer-service:8081/users/${header.userId}?throwExceptionOnFailure=false")
+        .choice()
+            .when(header(Exchange.HTTP_RESPONSE_CODE).isEqualTo(200))
+                .setBody(exchangeProperty("order"))
+                .to("kafka:order-created")        // event for everyone
+            .otherwise()
+                .log("unknown customer — rejected")
+        .end();
+
+NOTE
+    The pattern: validate against another service, then publish
+    an EVENT — never call five services in a chain if a topic
+    can decouple them.
+
+
+=======================================================================
+    28. CAMEL CONTEXT  — the engine
+=======================================================================
+
+WHAT
+    The runtime that holds and runs all routes. The "brain".
+    No context = nothing runs.
+
+EXAMPLE
+
+    # in Spring Boot you never create it — it is auto-started.
+    # you only configure it in application.properties:
+    camel.main.name=OrderSystem
+
+    # log line proving it exists:
+    Apache Camel 4.x (OrderSystem) started in 250ms
+
+NOTE
+    One CamelContext per application. All your RouteBuilders are
+    loaded into it automatically (@Component does that).
+
+
+=======================================================================
+    29. ROUTE STARTUP ORDER  — who starts first
+=======================================================================
+
+WHAT
+    When one route depends on another, control the start sequence.
+
+EXAMPLE
+
+    from("direct:prepare")
+        .routeId("prepare-route")
+        .startupOrder(1)                 // starts first
+        .log("ready");
+
+    from("file:data/input")
+        .routeId("consume-route")
+        .startupOrder(2)                 // starts after
+        .to("direct:prepare");
+
+NOTE
+    Lower number = earlier start. Rarely needed — but the day you
+    need it, nothing else helps.
+
+
+=======================================================================
+    30. ROUTE POLICY / THROTTLING  — control the flow
+=======================================================================
+
+WHAT
+    Limit or manage how a route behaves: max messages per second,
+    pause/resume, custom start/stop rules.
+
+EXAMPLE
+
+    from("kafka:orders")
+        .routeId("order-consumer")
+        .throttle(10).timePeriodMillis(1000)   // max 10 msgs/second
+        .to("direct:process");
+
+NOTE
+    Protects slow downstream systems (databases, partner APIs)
+    from being flooded. For advanced control (pause at night,
+    circuit breakers) look up RoutePolicy and Resilience4j.
+
+
+=======================================================================
+    PRODUCTION BEST PRACTICES  (the checklist)
+=======================================================================
+
+    [ ] Meaningful routeId on EVERY route
+    [ ] Business logic in Beans; Camel does integration only
+    [ ] Processors only for small custom steps
+    [ ] onException + retry + DLQ on every production route
+    [ ] Validate at the start — fail fast
+    [ ] Log at entry, decision points, and exit
+    [ ] Keep routes SHORT — split with direct:
+    [ ] Stash values in headers/properties before transforming body
+    [ ] Every message ends somewhere visible — never silently lost
+    [ ] Credentials in application.properties ({{placeholders}}),
+        never inside URIs
+
+
+=======================================================================
+    ONE-LINE SUMMARY
+=======================================================================
+
+    Camel = a postman with 300+ ready connectors: you declare
+    FROM -> steps -> TO, and it delivers — with retries, error
+    handling, transformation and monitoring built in.
