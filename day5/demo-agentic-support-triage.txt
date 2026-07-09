@@ -1,0 +1,450 @@
+=======================================================================
+    DEMO : AGENTIC AI SUPPORT TRIAGE  (Apache Camel + Spring Boot)
+    one simple real-world app — enterprise transformation in action
+=======================================================================
+
+THE REAL-WORLD STORY.
+
+    Every company has a support inbox. Hundreds of emails a day:
+
+        "hi i was charged twice for my order please help!!"
+        "when will my package arrive?"
+        "I want a refund, order O-2 never came"
+
+    TODAY (before):  a HUMAN reads every email, looks up the
+                     customer, checks the order, decides what to do.
+                     Slow, expensive, boring.
+
+    AFTER (this app): Camel watches the inbox. An AI AGENT reads
+                     each email, CALLS OUR JAVA CODE to look up the
+                     customer and the order, and DECIDES:
+
+                         URGENT  -> escalate to a human now
+                         REFUND  -> send to the refunds team
+                         NORMAL  -> standard queue
+
+                     Camel routes the ticket to the right folder
+                     with the agent's analysis attached.
+
+    That is "agentic AI for enterprise transformation" in one
+    sentence: the reading, looking-up and deciding — the human
+    part — is now done by an agent. Humans handle only outcomes.
+
+ARCHITECTURE
+
+    tickets/inbox/*.txt                (customer emails arrive here)
+           |
+           v
+    +---------------------------------------------------+
+    |  SPRING BOOT + CAMEL                              |
+    |                                                   |
+    |  Camel route: file -> agent -> decide -> route    |
+    |                        |                          |
+    |                        v                          |
+    |            SupportAgent (Spring AI)               |
+    |            reads the email, may call:             |
+    |              findCustomer(email)   <- our Java    |
+    |              getOrderStatus(id)    <- our Java    |
+    |            answers: URGENT / REFUND / NORMAL      |
+    |                        |                          |
+    |                        v                          |
+    |            OLLAMA in Docker (:11434)              |
+    |            model qwen2.5:3b — free, local         |
+    +------------------------|--------------------------+
+                             |
+            +----------------+----------------+
+            v                v                v
+     tickets/urgent/  tickets/refund/  tickets/normal/
+     (email + the agent's analysis inside each file)
+
+    CAMEL  = watches the inbox, routes the outcome  (integration)
+    AGENT  = reads, investigates via tools, decides (intelligence)
+    TOOLS  = plain Java methods with dummy data     (your systems)
+
+
+=======================================================================
+    STEP 0 : PREREQUISITES  (5 min — you likely have all of it)
+=======================================================================
+
+    docker run -d --name ollama -p 11434:11434 -v ollama-data:/root/.ollama ollama/ollama
+    docker exec ollama ollama pull qwen2.5:3b
+
+(Already have the ollama container with qwen2.5:3b? Skip this.)
+
+Verify:   docker exec ollama ollama list   ->  qwen2.5:3b listed
+
+
+=======================================================================
+    STEP 1 : CREATE THE PROJECT
+=======================================================================
+
+https://start.spring.io
+
+    Project      : Maven          Language : Java
+    Spring Boot  : 3.5.x          Java     : 17
+    Group        : com.gosi
+    Artifact     : support-triage
+
+ADD DEPENDENCIES (two):
+    1. Spring Web
+    2. Ollama          (search "ollama" — this is Spring AI)
+
+GENERATE -> unzip -> open in IntelliJ.
+
+THEN add Camel to pom.xml inside <dependencies>:
+
+    <dependency>
+        <groupId>org.apache.camel.springboot</groupId>
+        <artifactId>camel-spring-boot-starter</artifactId>
+        <version>4.14.0</version>
+    </dependency>
+
+(One dependency with an explicit version — fine for one artifact;
+ use the camel BOM when you add more.)
+
+Click "Load Maven Changes".
+
+
+=======================================================================
+    STEP 2 : application.properties
+=======================================================================
+
+FILE : src/main/resources/application.properties
+-----------------------------------------------------------------------
+
+    spring.ai.ollama.base-url=http://localhost:11434
+    spring.ai.ollama.chat.options.model=qwen2.5:3b
+    spring.ai.ollama.chat.options.temperature=0.1
+
+    camel.main.name=SupportTriage
+
+-----------------------------------------------------------------------
+
+temperature 0.1 = as deterministic as possible — we want the same
+email to get the same decision every time.
+
+
+=======================================================================
+    STEP 3 : THE TOOLS  (the agent's hands — plain Java)
+=======================================================================
+
+FILE : src/main/java/com/gosi/supporttriage/ai/SupportTools.java
+-----------------------------------------------------------------------
+
+    package com.gosi.supporttriage.ai;
+
+    import org.springframework.ai.tool.annotation.Tool;
+
+    import java.util.Map;
+
+    public class SupportTools {
+
+        // dummy CRM — in real life: a REST call / database
+        private static final Map<String, String> CUSTOMERS = Map.of(
+                "rahul@mail.com", "Rahul, GOLD customer since 2019",
+                "neha@mail.com",  "Neha, GOLD customer since 2021",
+                "bob@mail.com",   "Bob, BASIC customer since 2024");
+
+        // dummy order system
+        private static final Map<String, String> ORDERS = Map.of(
+                "O-1", "DELIVERED on time",
+                "O-2", "PAYMENT FAILED, charged twice by mistake",
+                "O-3", "SHIPPED, arriving in 2 days");
+
+        @Tool(description = "Look up a customer by their email address. "
+                + "Returns the customer's name and membership level, or NOT_FOUND.")
+        public String findCustomer(String email) {
+            System.out.println(">>> TOOL: findCustomer(" + email + ")");
+            return CUSTOMERS.getOrDefault(email.toLowerCase().trim(), "NOT_FOUND");
+        }
+
+        @Tool(description = "Get the current status of an order by its order id, "
+                + "for example O-1 or O-2. Returns the status or NOT_FOUND.")
+        public String getOrderStatus(String orderId) {
+            System.out.println(">>> TOOL: getOrderStatus(" + orderId + ")");
+            return ORDERS.getOrDefault(orderId.toUpperCase().trim(), "NOT_FOUND");
+        }
+    }
+
+-----------------------------------------------------------------------
+
+NOTE
+    The @Tool DESCRIPTION is written FOR THE MODEL — it reads it to
+    decide when to call which method. The println lines are your
+    window: every agent investigation is visible in the console.
+
+
+=======================================================================
+    STEP 4 : THE AGENT  (reads, investigates, decides)
+=======================================================================
+
+FILE : src/main/java/com/gosi/supporttriage/ai/SupportAgent.java
+-----------------------------------------------------------------------
+
+    package com.gosi.supporttriage.ai;
+
+    import org.springframework.ai.chat.client.ChatClient;
+    import org.springframework.stereotype.Service;
+
+    @Service
+    public class SupportAgent {
+
+        private final ChatClient chatClient;
+
+        public SupportAgent(ChatClient.Builder builder) {
+            this.chatClient = builder
+                    .defaultSystem("""
+                        You are a support triage agent for an online shop.
+                        You receive one customer email at a time.
+
+                        Investigate with the tools:
+                        - find the customer by their email address
+                        - check any order id mentioned (like O-1, O-2)
+
+                        Then decide. Your answer MUST start with exactly
+                        one of these words on the first line:
+                          URGENT  - money problems (double charge, failed
+                                    payment) or angry GOLD customers
+                          REFUND  - customer clearly asks for a refund
+                          NORMAL  - everything else
+
+                        After the decision word, write a 2-sentence
+                        summary of the case for the human team.
+                        Never invent customer or order data - if the
+                        tools return NOT_FOUND, say so.
+                        """)
+                    .build();
+        }
+
+        /** Camel calls this: email text in -> "DECISION + summary" out */
+        public String triage(String emailText) {
+            return chatClient.prompt()
+                    .tools(new SupportTools())     // the agent's toolbox
+                    .user(emailText)
+                    .call()
+                    .content();
+        }
+    }
+
+-----------------------------------------------------------------------
+
+NOTE
+    The system prompt IS the job description: what to investigate,
+    what decisions exist, output format pinned down hard. Strict
+    "first word = decision" makes the answer machine-routable —
+    that is how AI output plugs into a Camel choice().
+
+
+=======================================================================
+    STEP 5 : THE CAMEL ROUTE  (watch -> triage -> route)
+=======================================================================
+
+FILE : src/main/java/com/gosi/supporttriage/routes/TriageRoute.java
+-----------------------------------------------------------------------
+
+    package com.gosi.supporttriage.routes;
+
+    import com.gosi.supporttriage.ai.SupportAgent;
+    import org.apache.camel.builder.RouteBuilder;
+    import org.springframework.stereotype.Component;
+
+    @Component
+    public class TriageRoute extends RouteBuilder {
+
+        @Override
+        public void configure() throws Exception {
+
+            from("file:tickets/inbox")
+                .routeId("support-triage")
+                .convertBodyTo(String.class)
+                .log("NEW TICKET ${file:name}:\n${body}")
+
+                // keep the original email — the agent call replaces the body
+                .setProperty("email", body())
+
+                // the agent reads, investigates (tools!), decides
+                .bean(SupportAgent.class, "triage")
+                .log("AGENT VERDICT:\n${body}")
+
+                // first word of the verdict -> routing header
+                .process(e -> {
+                    String verdict = e.getIn().getBody(String.class).trim();
+                    String decision = verdict.split("\\s+")[0]
+                            .replaceAll("[^A-Z]", "");   // URGENT / REFUND / NORMAL
+                    e.getIn().setHeader("decision", decision);
+
+                    // final file content = original email + agent analysis
+                    String email = e.getProperty("email", String.class);
+                    e.getIn().setBody("=== CUSTOMER EMAIL ===\n" + email
+                            + "\n\n=== AGENT ANALYSIS ===\n" + verdict);
+                })
+
+                // route the ticket where it belongs
+                .choice()
+                    .when(header("decision").isEqualTo("URGENT"))
+                        .log("-> tickets/urgent  (a human is needed NOW)")
+                        .to("file:tickets/urgent")
+                    .when(header("decision").isEqualTo("REFUND"))
+                        .log("-> tickets/refund")
+                        .to("file:tickets/refund")
+                    .otherwise()
+                        .log("-> tickets/normal")
+                        .to("file:tickets/normal")
+                .end();
+        }
+    }
+
+-----------------------------------------------------------------------
+
+NOTE — the division of labor, one line each:
+    Camel  : WHEN (file arrives) and WHERE (which folder)
+    Agent  : WHAT IS THIS and WHAT SHOULD HAPPEN
+    choice : trusts only the FIRST WORD — and has an otherwise(),
+             because AI output is input: never trust, always route
+             the unexpected somewhere visible.
+
+
+=======================================================================
+    STEP 6 : RUN + TEST
+=======================================================================
+
+Run the application.
+
+EXPECTED AT STARTUP
+    ... Started support-triage (file://tickets/inbox)
+
+-----------------------------------------------------------------------
+ TEST 1 : the urgent one (double charge + GOLD customer)
+-----------------------------------------------------------------------
+
+    Set-Content tickets\inbox\ticket1.txt "Hi, I am neha@mail.com and I was CHARGED TWICE for order O-2! Please fix this immediately."
+
+EXPECTED OUTPUT (10-40 s — the agent is thinking and investigating)
+
+    NEW TICKET ticket1.txt: ...
+    >>> TOOL: findCustomer(neha@mail.com)
+    >>> TOOL: getOrderStatus(O-2)
+    AGENT VERDICT:
+    URGENT
+    Neha is a GOLD customer since 2021 and order O-2 shows a failed
+    payment with a double charge. Recommend immediate refund of the
+    duplicate charge and a personal apology.
+    -> tickets/urgent  (a human is needed NOW)
+
+CHECK:  Get-Content tickets\urgent\ticket1.txt
+        -> original email + the agent's analysis, together.
+
+THE MOMENT TO PAUSE ON:
+    The two >>> TOOL lines. Nobody wrote "first look up the
+    customer, then check the order". The agent PLANNED that
+    investigation itself. That is agentic AI.
+
+-----------------------------------------------------------------------
+ TEST 2 : the refund request
+-----------------------------------------------------------------------
+
+    Set-Content tickets\inbox\ticket2.txt "Hello, bob@mail.com here. My order O-1 arrived but I do not like the color. I want a refund please."
+
+EXPECTED
+    >>> TOOL: findCustomer(bob@mail.com)
+    >>> TOOL: getOrderStatus(O-1)
+    AGENT VERDICT:
+    REFUND
+    Bob (BASIC customer) requests a refund for order O-1 which was
+    delivered on time. Standard refund process applies.
+    -> tickets/refund
+
+-----------------------------------------------------------------------
+ TEST 3 : the normal question
+-----------------------------------------------------------------------
+
+    Set-Content tickets\inbox\ticket3.txt "Hi, rahul@mail.com - just checking when order O-3 will arrive. Thanks!"
+
+EXPECTED
+    >>> TOOL: getOrderStatus(O-3)
+    AGENT VERDICT:
+    NORMAL
+    Rahul asks for a delivery estimate; order O-3 is shipped and
+    arriving in 2 days. A standard status reply is enough.
+    -> tickets/normal
+
+FINAL FOLDER PICTURE
+
+    tickets/
+    |-- inbox/     (.camel/ holds the consumed originals)
+    |-- urgent/    ticket1.txt   <- email + analysis
+    |-- refund/    ticket2.txt
+    |-- normal/    ticket3.txt
+
+
+=======================================================================
+    THE ENTERPRISE TRANSFORMATION SLIDE  (say this at the end)
+=======================================================================
+
+    BEFORE                            AFTER (this app)
+    ------------------------------    ------------------------------
+    human reads every email           agent reads every email
+    human searches CRM + orders       agent calls the tools itself
+    human decides the queue           agent decides, Camel routes
+    minutes per ticket                seconds per ticket
+    humans do ALL tickets             humans do only URGENT ones,
+                                      with the analysis pre-written
+
+    And notice what we did NOT throw away: the file component, the
+    stash-in-property idiom, choice/otherwise, "every message ends
+    somewhere visible" — the integration discipline carries the AI.
+    The agent is just the smartest step a Camel route ever had.
+
+
+=======================================================================
+    IF SOMETHING GOES WRONG
+=======================================================================
+
+    Connection refused :11434        Ollama container not running
+    "model not found"                qwen2.5:3b not pulled (Step 0)
+    Verdict without URGENT/REFUND/   small-model wobble -> otherwise()
+    NORMAL first word                catches it -> tickets/normal
+                                     (by design! discuss it)
+    Agent answers but no >>> TOOL    asked nothing tool-worthy, or
+    lines                            model skipped tools -> make the
+                                     email mention the order id
+    Very slow (30-60 s)              normal: agent = several model
+                                     calls in a loop, on CPU
+    Route does nothing               @Component missing, or file
+                                     dropped in the wrong folder —
+                                     tickets/ is relative to the
+                                     project root
+
+
+=======================================================================
+    EXERCISE  (15 min)
+=======================================================================
+
+Add a third tool and let the agent use it:
+
+    @Tool(description = "Issue a refund for an order id. "
+            + "Returns the refund confirmation number.")
+    public String issueRefund(String orderId) {
+        System.out.println(">>> TOOL: issueRefund(" + orderId + ")");
+        return "REF-" + (int) (Math.random() * 9000 + 1000);
+    }
+
+Extend the system prompt: "For clear double-charge cases on GOLD
+customers you may issue the refund yourself and include the
+confirmation number."
+
+Re-send ticket1. EXPECTED: the agent looks up customer + order,
+CALLS issueRefund, and the verdict contains a REF- number.
+The agent now ACTS, not only decides — with a guardrail (only
+GOLD + double-charge) written in plain English in the prompt.
+
+
+=======================================================================
+    CHECKLIST
+=======================================================================
+
+    [ ] ticket1 -> urgent/ with both TOOL lines in the console
+    [ ] ticket2 -> refund/, ticket3 -> normal/
+    [ ] each routed file contains email + agent analysis
+    [ ] you can explain Camel vs Agent vs Tools in one line each
+    [ ] exercise: agent issues a refund with a REF- number

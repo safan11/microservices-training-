@@ -1,0 +1,376 @@
+=======================================================================
+    HELLO AGENTIC AI  (Spring Boot + Camel + Ollama)
+    a new small project, two examples=======================================================================
+
+WHAT WE BUILD
+
+    EXAMPLE 1 : chat endpoint   GET /hello/ask?q=...  -> AI answers
+    EXAMPLE 2 : a tiny AGENT    the AI calls YOUR Java method
+                                (triggered by a Camel route)
+
+
+=======================================================================
+    PROJECT STRUCTURE  (what you will end up with)
+=======================================================================
+
+    hello-agentic/
+    |-- pom.xml                              dependencies
+    |-- src/main/resources/
+    |     |-- application.properties         AI config (model, URL)
+    |-- src/main/java/com/gosi/helloagentic/
+          |-- HelloAgenticApplication.java   generated, untouched
+          |-- ai/
+          |     |-- HelloController.java     EXAMPLE 1: plain chat
+          |     |-- HelloAgent.java          EXAMPLE 2: agent + @Tool
+          |-- routes/
+                |-- HelloAgentRoute.java     EXAMPLE 2: Camel trigger
+
+    WHAT EACH THING DOES (one line each):
+      properties      = WHICH model, WHERE it runs
+      HelloController = ask the AI over HTTP (no tools)
+      HelloAgent      = ChatClient + one @Tool the AI may call
+      HelloAgentRoute = Camel timer fires once -> asks the agent
+
+
+=======================================================================
+    PACKAGE STRUCTURE  (as you see it in IntelliJ's project tree)
+=======================================================================
+
+    com.gosi.helloagentic                 <- root package (generated)
+    |                                        holds ONLY the main class
+    |-- HelloAgenticApplication.java
+    |
+    |-- com.gosi.helloagentic.ai          <- YOU create this package
+    |     |-- HelloController.java           all AI code lives here
+    |     |-- HelloAgent.java
+    |
+    |-- com.gosi.helloagentic.routes      <- YOU create this package
+          |-- HelloAgentRoute.java           all Camel routes live here
+
+    HOW TO CREATE A PACKAGE:
+        right-click com.gosi.helloagentic -> New -> Package
+        -> type just the last word:  ai      (then again for: routes)
+
+    WHY THIS SPLIT:
+        ai/     = everything that talks to the model
+        routes/ = everything that moves messages (Camel)
+        One folder per concern — you always know where to look.
+
+    RULE: all packages must stay UNDER com.gosi.helloagentic —
+    Spring only scans below the main class's package. A class
+    outside it is silently ignored (no error!).
+
+
+=======================================================================
+    THEORY IN 2 MINUTES
+=======================================================================
+
+WHAT IS AN AGENT
+
+    CHATBOT:  question --> model --> answer            (one shot)
+
+    AGENT:    question --> model thinks
+                             |  "I need data. Which tool?"
+                             v
+                       calls YOUR JAVA METHOD  <----+
+                             |                      |  repeats until
+                             v                      |  it has enough
+                       reads the result ------------+
+                             |
+                             v
+                       final answer
+
+    Agent = LLM + tools + loop.   Tools = plain Java methods.
+
+WHY
+    An LLM alone knows NOTHING about your systems — not even the
+    current time. It can only guess (hallucinate). Tools ground it
+    in reality: it can look up, check, decide, act.
+
+HOW IT WORKS INTERNALLY (a JSON protocol, no magic)
+    1. Spring AI sends question + tool descriptions to the model
+    2. model may reply: {"tool_call":"getCurrentTime","arguments":{}}
+    3. SPRING AI executes your Java method (the model never runs code)
+    4. result goes back to the model
+    5. repeat 2-4 until the model answers with normal text
+
+    model proposes -> framework executes -> model reads -> repeat.
+
+
+=======================================================================
+    STEP 0 : PREREQUISITES  (all three must pass)
+=======================================================================
+
+    java -version                      -> 17 or higher
+    docker ps                          -> ollama ... Up
+    curl.exe http://localhost:11434    -> "Ollama is running"
+
+No ollama container yet?
+
+    docker run -d --name ollama -p 11434:11434 -v ollama-data:/root/.ollama ollama/ollama
+    docker exec ollama ollama pull qwen2.5:3b        (~1.9 GB, once)
+
+Container exists but Exited?    docker start ollama
+
+
+=======================================================================
+    STEP 1 : CREATE THE PROJECT
+=======================================================================
+
+https://start.spring.io
+
+    Project      : Maven          Language : Java
+    Spring Boot  : 3.5.x          Java     : 17
+    Group        : com.gosi
+    Artifact     : hello-agentic
+
+ADD DEPENDENCIES (two):
+    1. Spring Web
+    2. Ollama          (search "ollama" — this is Spring AI)
+
+GENERATE -> unzip -> IntelliJ: File -> Open -> the folder
+-> wait for Maven import (bottom-right bar).
+
+THEN add Camel to pom.xml inside <dependencies>:
+
+    <dependency>
+        <groupId>org.apache.camel.springboot</groupId>
+        <artifactId>camel-spring-boot-starter</artifactId>
+        <version>4.14.0</version>
+    </dependency>
+
+Click "Load Maven Changes" (refresh icon, top right).
+
+
+=======================================================================
+    STEP 2 : application.properties
+=======================================================================
+
+FILE : src/main/resources/application.properties
+-----------------------------------------------------------------------
+
+    # where the AI server runs (the Docker container)
+    spring.ai.ollama.base-url=http://localhost:11434
+
+    # must match "ollama list" exactly
+    spring.ai.ollama.chat.options.model=qwen2.5:3b
+
+    # 0.2 = focused, repeatable answers
+    spring.ai.ollama.chat.options.temperature=0.2
+
+    # name in Camel log lines
+    camel.main.name=HelloAgentic
+
+-----------------------------------------------------------------------
+
+
+=======================================================================
+    STEP 3 : EXAMPLE 1 — HELLO CHAT  (no agent yet)
+=======================================================================
+
+Goal: prove the model answers THROUGH YOUR APP.
+
+Create package "ai" under com.gosi.helloagentic, then:
+
+FILE : src/main/java/com/gosi/helloagentic/ai/HelloController.java
+-----------------------------------------------------------------------
+
+    package com.gosi.helloagentic.ai;
+
+    import org.springframework.ai.chat.client.ChatClient;
+    import org.springframework.web.bind.annotation.GetMapping;
+    import org.springframework.web.bind.annotation.RequestParam;
+    import org.springframework.web.bind.annotation.RestController;
+
+    @RestController
+    public class HelloController {
+
+        // door to the model; auto-configured from application.properties
+        private final ChatClient chatClient;
+
+        public HelloController(ChatClient.Builder builder) {
+            this.chatClient = builder.build();
+        }
+
+        @GetMapping("/hello/ask")
+        public String ask(@RequestParam String q) {
+            return chatClient.prompt()
+                    .user(q)          // the question
+                    .call()           // send to Ollama, wait
+                    .content();       // just the reply text
+        }
+    }
+
+-----------------------------------------------------------------------
+
+RUN the app (green arrow on HelloAgenticApplication), then:
+
+    curl.exe "http://localhost:8080/hello/ask?q=say hello in 5 words"
+
+EXPECTED (wording varies)
+    Hello there, nice to meet you!
+
+NOW ask something it CANNOT know:
+
+    curl.exe "http://localhost:8080/hello/ask?q=what time is it right now"
+
+EXPECTED: it guesses or refuses — the model has NO CLOCK.
+Remember this answer. Example 2 fixes it.
+
+
+=======================================================================
+    STEP 4 : EXAMPLE 2 — HELLO AGENT  (one tool + a Camel route)
+=======================================================================
+
+Goal: the SAME model answers the SAME question correctly —
+because it can now call a Java method.
+
+FILE : src/main/java/com/gosi/helloagentic/ai/HelloAgent.java
+-----------------------------------------------------------------------
+
+    package com.gosi.helloagentic.ai;
+
+    import org.springframework.ai.chat.client.ChatClient;
+    import org.springframework.ai.tool.annotation.Tool;
+    import org.springframework.stereotype.Service;
+
+    import java.time.LocalDateTime;
+
+    @Service
+    public class HelloAgent {
+
+        // the toolbox: a plain Java method + @Tool
+        public static class TimeTools {
+
+            // the description is read BY THE MODEL to pick the tool
+            @Tool(description = "Get the current date and time on the server.")
+            public String getCurrentTime() {
+                // proof line: shows in console when the AI calls us
+                System.out.println(">>> TOOL: getCurrentTime()");
+                return LocalDateTime.now().toString();
+            }
+        }
+
+        private final ChatClient chatClient;
+
+        public HelloAgent(ChatClient.Builder builder) {
+            this.chatClient = builder.build();
+        }
+
+        // question in -> answer out (Camel calls this)
+        public String ask(String question) {
+            return chatClient.prompt()
+                    .tools(new TimeTools())   // THIS line makes it an agent
+                    .user(question)
+                    .call()                   // Spring AI runs the tool loop
+                    .content();
+        }
+    }
+
+-----------------------------------------------------------------------
+
+Create package "routes" under com.gosi.helloagentic, then:
+
+FILE : src/main/java/com/gosi/helloagentic/routes/HelloAgentRoute.java
+-----------------------------------------------------------------------
+
+    package com.gosi.helloagentic.routes;
+
+    import com.gosi.helloagentic.ai.HelloAgent;
+    import org.apache.camel.builder.RouteBuilder;
+    import org.springframework.stereotype.Component;
+
+    @Component
+    public class HelloAgentRoute extends RouteBuilder {
+
+        @Override
+        public void configure() throws Exception {
+
+            // fire once, 5 s after startup
+            from("timer:helloAgent?repeatCount=1&delay=5000")
+                .routeId("hello-agent-route")
+
+                // the question becomes the message body
+                .setBody(constant("What time is it right now? Answer in one sentence."))
+                .log("Asking the agent: ${body}")
+
+                // body in -> HelloAgent.ask(body) -> answer becomes new body
+                .bean(HelloAgent.class, "ask")
+
+                .log("Agent answered: ${body}");
+        }
+    }
+
+-----------------------------------------------------------------------
+
+RESTART THE APP. Output appears in the IntelliJ CONSOLE
+(nothing to curl — the route runs by itself).
+
+EXPECTED CONSOLE (5-40 s after startup; first call loads the
+model into RAM):
+
+    hello-agent-route : Asking the agent: What time is it right now? ...
+    >>> TOOL: getCurrentTime()
+    hello-agent-route : Agent answered: It is currently 2026-07-09T00:41:23.
+
+READ THE THREE LINES AS A STORY:
+    line 1  Camel asked the question
+    line 2  the MODEL DECIDED to call our Java method  <-- the moment!
+    line 3  the model wove the REAL time into its answer
+
+
+=======================================================================
+    THE LESSON
+=======================================================================
+
+    Example 1: the model GUESSED the time — it has no clock.
+    Example 2: the SAME model called our Java method and answered
+               with reality.
+
+    The entire difference:
+        one @Tool method  +  one .tools(...) line.
+
+    That is agentic AI. Bigger agents are this same pattern with
+    smarter tools: findCustomer, getOrderStatus, issueRefund...
+
+    DIVISION OF LABOR (memorize):
+        CAMEL : WHEN it happens and WHERE data flows
+        AGENT : HOW to answer (thinking + tool loop)
+        TOOL  : YOUR system (here: the server clock)
+
+
+=======================================================================
+    IF SOMETHING GOES WRONG
+=======================================================================
+
+    Connection refused :11434        Ollama not running ->
+                                     docker start ollama, verify:
+                                     curl.exe http://localhost:11434
+
+    "model not found"                docker exec ollama ollama pull qwen2.5:3b
+
+    Answer but NO ">>> TOOL:" line   model skipped the tool -> ask
+                                     more directly: "Use the time
+                                     tool: what time is it?"
+
+    Very slow first answer           normal — first call loads the
+                                     model into RAM
+
+    Route does not fire              @Component missing, or class
+                                     outside com.gosi.helloagentic
+
+    Maven import fails               needs internet on first open
+
+
+=======================================================================
+    CHECKLIST
+=======================================================================
+
+    [ ] Step 0: curl :11434 says "Ollama is running"
+    [ ] /hello/ask answers a normal question
+    [ ] /hello/ask GUESSES on "what time is it"
+    [ ] restart -> console shows >>> TOOL: getCurrentTime()
+    [ ] the agent's answer contains the REAL current time
+    [ ] you can say the loop in one sentence:
+        "model proposes a tool call, the framework executes it,
+         the model reads the result, repeat until it answers"
