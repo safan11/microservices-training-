@@ -1,0 +1,472 @@
+================================================================================
+Understanding KUBERNETES FUNDAMENTALS -
+Container, Docker, Kubernetes & kubectl
+================================================================================
+
+Let's understand Kubernetes like we're building a real production application.
+
+Imagine our company has built an Online Shopping Application called ShopEasy.
+
+It has multiple services:
+
+• Frontend
+• Login Service
+• Product Service
+• Cart Service
+• Payment Service
+• Notification Service
+
+Instead of writing one huge application, we split it into smaller services (Microservices).
+
+Now the first question is...
+
+================================================================================
+WHAT IS A CONTAINER?
+================================================================================
+
+Imagine you developed the Login Service on your laptop.
+
+It works perfectly.
+
+You send the code to another developer.
+
+He says,
+
+"It doesn't work."
+
+You deploy it to QA.
+
+QA says,
+
+"It is failing."
+
+You deploy it to Production.
+
+Production also fails.
+
+Now everyone starts blaming each other.
+
+Developer:
+"It works on my machine."
+
+Operations Team:
+"It doesn't work on our server."
+
+Why?
+
+Because every machine is different.
+
+Developer Laptop
+
+• Ubuntu 22
+• Java 21
+• Maven 3.9
+• MySQL Driver Version A
+
+Production Server
+
+• Ubuntu 20
+• Java 17
+• Different Libraries
+• Different Configurations
+
+The application behaves differently because the environment is different.
+
+This problem existed for many years.
+
+--------------------------------------------------------------------------------
+
+Docker solved this problem.
+
+Instead of sending only the application,
+
+Docker packages EVERYTHING together.
+
+Think of it as a Lunch Box.
+
+Inside the lunch box,
+
+• Application Code
+• Java/Python/Node Runtime
+• Libraries
+• Dependencies
+• Required Files
+• Configuration
+
+Everything needed to run the application.
+
+Now wherever you take this lunch box,
+
+Laptop
+QA Server
+Production
+Cloud
+
+Everything inside remains exactly the same.
+
+So instead of saying
+
+"It works on my machine."
+
+We can now say
+
+"If the container runs,
+the application runs."
+
+This package is called a CONTAINER.
+
+Definition
+
+A Container is a lightweight package that contains an application along with all the dependencies, libraries, runtime, and configuration required to run it consistently on any machine.
+
+================================================================================
+WHAT IS DOCKER?
+================================================================================
+
+Docker is NOT the container.
+
+Docker is the tool that creates and runs containers.
+
+Think about shipping.
+
+Container = Shipping Box
+
+Docker = Factory that builds the shipping box.
+
+Docker takes your application and creates a container image.
+
+Later, Docker can run that image as a container.
+
+Example
+
+Application
+      │
+      ▼
+Docker Build
+      │
+      ▼
+Container Image
+      │
+      ▼
+Docker Run
+      │
+      ▼
+Running Container
+
+================================================================================
+WHY IS A SINGLE CONTAINER NOT ENOUGH?
+================================================================================
+
+Initially, our shopping application has
+
+1 Frontend Container
+1 Login Container
+1 Payment Container
+
+Everything works fine.
+
+After six months...
+
+The application becomes famous.
+
+Now millions of users are visiting.
+
+Instead of
+
+1 Login Container
+
+We now need
+
+20 Login Containers
+
+Similarly,
+
+15 Product Containers
+
+10 Payment Containers
+
+25 Frontend Containers
+
+Now imagine managing all these manually.
+
+Questions start coming.
+
+Which server should run them?
+
+What happens if one crashes?
+
+How do we start another?
+
+Which container should receive the next user request?
+
+How do we update all containers without downtime?
+
+How do we monitor hundreds of containers?
+
+Managing containers manually becomes impossible.
+
+This is where Kubernetes comes in.
+
+================================================================================
+WHAT IS KUBERNETES?
+================================================================================
+
+Kubernetes is a Container Orchestration Platform.
+
+That sounds complicated.
+
+Let's simplify it.
+
+Imagine a company.
+
+Containers are Employees.
+
+Employees do the actual work.
+
+Now imagine there are
+
+5000 Employees.
+
+Who manages them?
+
+Certainly not the CEO.
+
+The company hires an HR Manager.
+
+The HR Manager makes sure
+
+Employees are available
+
+If someone resigns,
+hire another.
+
+If business grows,
+hire more.
+
+If business becomes slow,
+reduce the workforce.
+
+Employees focus on work.
+
+HR focuses on management.
+
+Kubernetes is exactly that HR Manager.
+
+Containers run the application.
+
+Kubernetes manages the containers.
+
+Definition
+
+Kubernetes is an orchestration platform that automatically deploys, manages, scales, monitors, and heals containerized applications.
+
+================================================================================
+WHAT PROBLEMS DOES KUBERNETES SOLVE?
+================================================================================
+
+Without Kubernetes
+
+Developer starts containers manually.
+
+Developer restarts failed containers manually.
+
+Developer scales manually.
+
+Developer updates manually.
+
+Developer monitors manually.
+
+Lots of manual effort.
+
+------------------------------------------------------
+
+With Kubernetes
+
+Developer simply says
+
+"I want 10 instances of my Login Service."
+
+Kubernetes handles
+
+Starting containers
+
+Restarting failed containers
+
+Scaling
+
+Health Monitoring
+
+Networking
+
+Load Balancing
+
+Rolling Updates
+
+Automatic Recovery
+
+================================================================================
+HOW DO WE TALK TO KUBERNETES?
+================================================================================
+
+Imagine Kubernetes is a very large company.
+
+Can every employee directly walk into the CEO's office?
+
+No.
+
+There is a Reception Desk.
+
+Everyone submits requests there.
+
+In Kubernetes,
+
+that Reception Desk is called the API Server.
+
+But as users, we don't directly call the API Server every time.
+
+Instead, we use a command-line tool called kubectl.
+
+================================================================================
+WHAT IS kubectl?
+================================================================================
+
+kubectl (pronounced "cube-control") is the command-line tool used to communicate with a Kubernetes cluster.
+
+Think of kubectl as a Remote Control.
+
+The Television is Kubernetes.
+
+The Remote Control is kubectl.
+
+You never touch the TV hardware directly.
+
+You press buttons on the remote.
+
+Similarly,
+
+You don't directly modify Kubernetes internals.
+
+You use kubectl commands.
+
+Example
+
+kubectl get pods
+
+Meaning
+
+"Kubernetes,
+show me all the running Pods."
+
+------------------------------------------------------
+
+kubectl get nodes
+
+Meaning
+
+"Show me all worker machines."
+
+------------------------------------------------------
+
+kubectl get deployments
+
+Meaning
+
+"Show me all deployed applications."
+
+------------------------------------------------------
+
+kubectl apply -f deployment.yaml
+
+Meaning
+
+"Kubernetes,
+please create or update this application using the configuration in this YAML file."
+
+------------------------------------------------------
+
+kubectl delete pod login-pod
+
+Meaning
+
+"Delete this Pod."
+
+If that Pod belongs to a Deployment,
+
+Kubernetes immediately creates another Pod.
+
+================================================================================
+HOW DOES kubectl WORK INTERNALLY?
+================================================================================
+
+You type
+
+kubectl apply -f deployment.yaml
+
+        │
+        ▼
+
+kubectl sends an HTTP request
+
+        │
+        ▼
+
+Kubernetes API Server receives it
+
+        │
+        ▼
+
+API Server validates it
+
+        │
+        ▼
+
+Stores the desired state
+
+        │
+        ▼
+
+Other Kubernetes components make the cluster match that desired state
+
+Notice something important.
+
+kubectl itself does NOT create containers.
+
+kubectl simply sends your request to Kubernetes.
+
+Kubernetes does the actual work.
+
+================================================================================
+SUMMARY
+================================================================================
+
+Container
+--------
+Runs the application with everything it needs.
+
+Docker
+------
+Tool used to build and run containers.
+
+Kubernetes
+----------
+Platform that manages containers automatically.
+
+kubectl
+--------
+Command-line tool used to communicate with the Kubernetes cluster.
+
+Simple Analogy
+
+Application = Employee's Work
+
+Container = Employee carrying all the tools needed for the job
+
+Docker = Factory that prepares the employee's toolkit
+
+Kubernetes = HR Manager who manages thousands of employees
+
+kubectl = Phone used to call the HR Manager and submit requests
+
+In the next session we'll answer another important question:
+
+"If Kubernetes manages containers, then why do we need Pods?"
