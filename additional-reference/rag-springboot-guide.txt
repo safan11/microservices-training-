@@ -1,0 +1,593 @@
+
+   ╔══════════════════════════════════════════════════════════════╗
+   ║        RAG in SPRING BOOT · COMPLETE BEGINNER GUIDE          ║
+   ║     From Scratch · Real Scenario · Every IntelliJ Step      ║
+   ╚══════════════════════════════════════════════════════════════╝
+
+   We build a real app: an "HR Policy Assistant" chatbot that
+   answers employee questions using the company's own PDF/text
+   documents — powered by RAG.
+
+   Stack we use (all FREE, runs on your laptop, no API key):
+        • Spring Boot 3.x
+        • Spring AI  (Spring's official AI library)
+        • Ollama     (runs an AI model locally on your machine)
+
+   Read top to bottom once, then follow the STEPS section hands-on.
+
+
+   ════════════════════════════════════════════════════════════════
+    PART A · THEORY (understand before coding)
+   ════════════════════════════════════════════════════════════════
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  1 · WHAT IS RAG?                                            │
+   └──────────────────────────────────────────────────────────────┘
+
+   RAG = Retrieval Augmented Generation.
+
+   Break it into 3 words:
+        Retrieval   →  FIND relevant info from your documents
+        Augmented   →  ADD that info to the question
+        Generation  →  the AI GENERATES an answer using it
+
+   SIMPLE ANALOGY  (open-book exam):
+        A normal AI answers from memory (may guess/hallucinate).
+        RAG is like an OPEN-BOOK exam — before answering, it opens
+        YOUR book, reads the right page, THEN answers.
+
+   So RAG = AI + your own private documents.
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  2 · WHY DO WE NEED RAG? (the problem it solves)            │
+   └──────────────────────────────────────────────────────────────┘
+
+   A plain AI model (like ChatGPT) has problems for a company:
+
+        ✗ It doesn't know YOUR private data (HR policy, product docs)
+        ✗ Its knowledge is old (trained months/years ago)
+        ✗ It can "hallucinate" — make up confident wrong answers
+        ✗ You can't retrain a huge model every time a doc changes
+
+   RAG fixes all of this WITHOUT retraining the model:
+
+        ✔ Answers from YOUR documents
+        ✔ Always up to date (just update the documents)
+        ✔ Fewer wrong answers (it reads real text)
+        ✔ Cheap and fast (no model training needed)
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  3 · REAL-TIME SCENARIO                                      │
+   └──────────────────────────────────────────────────────────────┘
+
+   Company: "TechCorp" has a 60-page HR Policy document.
+
+   Every day employees ask HR the same questions:
+        • "How many casual leaves do I get per year?"
+        • "What is the notice period?"
+        • "Can I carry forward unused leaves?"
+
+   HR is tired of answering. So we build an HR Assistant chatbot.
+
+   WITHOUT RAG:
+        Employee asks → plain AI guesses → wrong policy → problem.
+
+   WITH RAG:
+        Employee asks → app searches the HR PDF → finds the exact
+        leave-policy paragraph → AI answers using THAT text → correct.
+
+   Same idea works for: customer support, product manuals,
+   legal docs, medical guidelines, college FAQs, etc.
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  4 · HOW RAG WORKS (the flow)                               │
+   └──────────────────────────────────────────────────────────────┘
+
+   RAG has TWO phases.
+
+
+   PHASE 1 — INGESTION (done once, when docs are added)
+   ----------------------------------------------------
+
+        HR Document (PDF/TXT)
+              │
+              ▼  split into small pieces
+        Chunks (small paragraphs)
+              │
+              ▼  convert each chunk to numbers (embedding)
+        Vectors  [0.12, 0.98, ...]
+              │
+              ▼  store them
+        VECTOR STORE  (a special searchable database)
+
+
+   PHASE 2 — QUERY (every time a user asks)
+   ----------------------------------------
+
+        User question: "How many casual leaves?"
+              │
+              ▼  convert question to a vector
+        Question Vector
+              │
+              ▼  find the most similar chunks (similarity search)
+        Top matching chunks from HR doc
+              │
+              ▼  build a prompt:  question + those chunks
+        Final Prompt
+              │
+              ▼  send to the AI model
+        AI Answer  →  "You get 12 casual leaves per year."
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  5 · KEY CONCEPTS (know these words)                        │
+   └──────────────────────────────────────────────────────────────┘
+
+   • EMBEDDING
+     Turning text into a list of numbers (a vector) that captures
+     its MEANING. Similar meaning → similar numbers.
+     "leave" and "vacation" end up close together.
+
+   • VECTOR
+     The list of numbers, e.g. [0.12, 0.98, 0.34, ...].
+
+   • VECTOR STORE / VECTOR DATABASE
+     A database that stores vectors and can quickly find the ones
+     closest to a given vector. (e.g. in-memory SimpleVectorStore,
+     PGVector, Redis, Chroma, Pinecone.)
+
+   • CHUNKING
+     Splitting a big document into small pieces so search is
+     accurate and the AI isn't overloaded.
+
+   • SIMILARITY SEARCH
+     Finding the chunks whose vectors are closest (most similar)
+     to the question's vector.
+
+   • EMBEDDING MODEL
+     The AI model that creates embeddings (e.g. nomic-embed-text).
+
+   • CHAT MODEL (LLM)
+     The AI model that writes the final answer (e.g. llama3).
+
+   • PROMPT
+     The final text we send to the AI = user question + retrieved
+     chunks + instructions.
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  6 · SPRING AI PIECES (what does what)                      │
+   └──────────────────────────────────────────────────────────────┘
+
+        Document          →  represents your loaded text
+        DocumentReader    →  reads a PDF/TXT file
+        TextSplitter      →  chunks the document
+        EmbeddingModel    →  converts text to vectors
+        VectorStore       →  stores + searches vectors
+        ChatClient        →  talks to the AI model, returns answer
+
+
+   ════════════════════════════════════════════════════════════════
+    PART B · HANDS-ON STEPS IN INTELLIJ (from scratch)
+   ════════════════════════════════════════════════════════════════
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  STEP 0 · Install Ollama + download the AI models           │
+   └──────────────────────────────────────────────────────────────┘
+
+   Ollama runs the AI models locally (free, offline, no API key).
+
+   1. Download Ollama:   https://ollama.com/download  → install it.
+
+   2. Open a terminal and pull TWO models:
+
+        ollama pull llama3
+        ollama pull nomic-embed-text
+
+      (llama3 = writes answers,  nomic-embed-text = makes embeddings)
+
+   3. Check Ollama is running:
+
+        ollama list
+
+      ✔ Output: you see llama3 and nomic-embed-text listed.
+
+   Keep Ollama running in the background while you build the app.
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  STEP 1 · Create the Spring Boot project                    │
+   └──────────────────────────────────────────────────────────────┘
+
+   EASIEST WAY — Spring Initializr website:
+
+   1. Go to  https://start.spring.io
+   2. Choose:
+        Project      : Maven
+        Language     : Java
+        Spring Boot  : 3.3.x  (or latest 3.x)
+        Group        : com.techcorp
+        Artifact     : hr-assistant
+        Java         : 17
+   3. Add Dependencies (click ADD DEPENDENCIES):
+        • Spring Web
+        • Ollama            (under "AI" section - Spring AI Ollama)
+   4. Click GENERATE → a zip downloads → unzip it.
+
+   OPEN IN INTELLIJ:
+   5. IntelliJ → File → Open → select the unzipped "hr-assistant"
+      folder → Open.
+   6. Wait for IntelliJ to download dependencies
+      (bottom-right shows a progress bar). Let it finish.
+
+   ✔ You now have a project with pom.xml and a main class:
+      HrAssistantApplication.java
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  STEP 2 · Check / add dependencies in pom.xml               │
+   └──────────────────────────────────────────────────────────────┘
+
+   Open pom.xml. Make sure these are present (add if missing):
+
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-ollama</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+   (Spring Initializr already adds the correct Spring AI version via
+   a BOM. If you added manually, use the version IntelliJ suggests.)
+
+   After editing pom.xml, click the small Maven "reload" icon that
+   pops up (or right-click pom.xml → Maven → Reload Project).
+
+   NOTE: For this simple demo we use an IN-MEMORY vector store
+   (built into Spring AI, no database needed). Perfect for learning.
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  STEP 3 · Configure application.properties                  │
+   └──────────────────────────────────────────────────────────────┘
+
+   Open  src/main/resources/application.properties  and add:
+
+        spring.application.name=hr-assistant
+
+        # Chat model (writes answers)
+        spring.ai.ollama.chat.options.model=llama3
+
+        # Embedding model (makes vectors)
+        spring.ai.ollama.embedding.options.model=nomic-embed-text
+
+        # Ollama location (default)
+        spring.ai.ollama.base-url=http://localhost:11434
+
+   ✔ This tells Spring AI which local models to use.
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  STEP 4 · Add your HR document                              │
+   └──────────────────────────────────────────────────────────────┘
+
+   1. In IntelliJ, right-click  src/main/resources  → New → Directory
+      → name it  docs
+   2. Right-click the  docs  folder → New → File → name it
+      hr-policy.txt
+   3. Paste some sample policy text, for example:
+
+        TechCorp HR Policy.
+        Employees are entitled to 12 casual leaves per year.
+        Employees get 15 sick leaves per year.
+        Unused casual leaves cannot be carried forward.
+        The notice period for resignation is 60 days.
+        Work from home is allowed 2 days per week.
+        Probation period is 6 months for new employees.
+
+   ✔ This is the "book" our RAG app will read from.
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  STEP 5 · Create a config to provide a VectorStore bean     │
+   └──────────────────────────────────────────────────────────────┘
+
+   We need an in-memory vector store bean.
+
+   1. Right-click the package  com.techcorp.hrassistant  → New →
+      Java Class → name it  RagConfig
+   2. Paste:
+
+        package com.techcorp.hrassistant;
+
+        import org.springframework.ai.embedding.EmbeddingModel;
+        import org.springframework.ai.vectorstore.SimpleVectorStore;
+        import org.springframework.ai.vectorstore.VectorStore;
+        import org.springframework.context.annotation.Bean;
+        import org.springframework.context.annotation.Configuration;
+
+        @Configuration
+        public class RagConfig {
+
+            // In-memory vector store (great for learning/demo)
+            @Bean
+            public VectorStore vectorStore(EmbeddingModel embeddingModel) {
+                return SimpleVectorStore.builder(embeddingModel).build();
+            }
+        }
+
+   What it does:
+        Creates a VectorStore that keeps vectors in memory and uses
+        the Ollama embedding model to turn text into vectors.
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  STEP 6 · Ingest the document at startup (Phase 1)          │
+   └──────────────────────────────────────────────────────────────┘
+
+   This class loads hr-policy.txt, chunks it, and stores vectors —
+   automatically when the app starts.
+
+   1. New Java Class → name it  DataLoader
+   2. Paste:
+
+        package com.techcorp.hrassistant;
+
+        import jakarta.annotation.PostConstruct;
+        import org.springframework.ai.document.Document;
+        import org.springframework.ai.reader.TextReader;
+        import org.springframework.ai.transformer.splitter.TokenTextSplitter;
+        import org.springframework.ai.vectorstore.VectorStore;
+        import org.springframework.beans.factory.annotation.Value;
+        import org.springframework.core.io.Resource;
+        import org.springframework.stereotype.Component;
+
+        import java.util.List;
+
+        @Component
+        public class DataLoader {
+
+            private final VectorStore vectorStore;
+
+            // load the file from resources/docs
+            @Value("classpath:docs/hr-policy.txt")
+            private Resource hrPolicy;
+
+            public DataLoader(VectorStore vectorStore) {
+                this.vectorStore = vectorStore;
+            }
+
+            @PostConstruct   // runs once at startup
+            public void load() {
+                // 1) read the document
+                TextReader reader = new TextReader(hrPolicy);
+                List<Document> docs = reader.get();
+
+                // 2) split into small chunks
+                TokenTextSplitter splitter = new TokenTextSplitter();
+                List<Document> chunks = splitter.apply(docs);
+
+                // 3) embed + store in the vector store
+                vectorStore.add(chunks);
+
+                System.out.println(">> HR policy loaded into vector store: "
+                        + chunks.size() + " chunks");
+            }
+        }
+
+   What it does (Phase 1 from the theory):
+        read file → split into chunks → embed → store. Done at boot.
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  STEP 7 · Create the Controller (Phase 2 - the Q&A)         │
+   └──────────────────────────────────────────────────────────────┘
+
+   This handles user questions: search the docs, then ask the AI.
+
+   1. New Java Class → name it  ChatController
+   2. Paste:
+
+        package com.techcorp.hrassistant;
+
+        import org.springframework.ai.chat.client.ChatClient;
+        import org.springframework.ai.document.Document;
+        import org.springframework.ai.vectorstore.SearchRequest;
+        import org.springframework.ai.vectorstore.VectorStore;
+        import org.springframework.web.bind.annotation.GetMapping;
+        import org.springframework.web.bind.annotation.RequestParam;
+        import org.springframework.web.bind.annotation.RestController;
+
+        import java.util.List;
+        import java.util.stream.Collectors;
+
+        @RestController
+        public class ChatController {
+
+            private final ChatClient chatClient;
+            private final VectorStore vectorStore;
+
+            public ChatController(ChatClient.Builder builder,
+                                  VectorStore vectorStore) {
+                this.chatClient = builder.build();
+                this.vectorStore = vectorStore;
+            }
+
+            @GetMapping("/ask")
+            public String ask(@RequestParam String question) {
+
+                // 1) RETRIEVAL: find top matching chunks
+                List<Document> results = vectorStore.similaritySearch(
+                        SearchRequest.builder()
+                                .query(question)
+                                .topK(3)      // top 3 closest chunks
+                                .build());
+
+                // 2) AUGMENT: join the chunks into context text
+                String context = results.stream()
+                        .map(Document::getText)
+                        .collect(Collectors.joining("\n"));
+
+                // 3) GENERATION: build prompt and ask the AI
+                String prompt = """
+                        Answer the question using ONLY the context below.
+                        If the answer is not in the context, say
+                        "I don't know based on the HR policy."
+
+                        Context:
+                        %s
+
+                        Question: %s
+                        """.formatted(context, question);
+
+                return chatClient.prompt()
+                        .user(prompt)
+                        .call()
+                        .content();
+            }
+        }
+
+   What it does (Phase 2 from the theory):
+        retrieve chunks → augment prompt → generate answer.
+        The "answer only from context" line reduces hallucination.
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  STEP 8 · Run the application                               │
+   └──────────────────────────────────────────────────────────────┘
+
+   1. Open  HrAssistantApplication.java
+   2. Click the green ► arrow next to the main method → Run.
+      (Make sure Ollama is still running in the background!)
+
+   ✔ Console shows:
+        >> HR policy loaded into vector store: X chunks
+        Tomcat started on port(s): 8080
+        Started HrAssistantApplication ...
+
+
+   ┌──────────────────────────────────────────────────────────────┐
+   │  STEP 9 · Test it (ask real questions)                      │
+   └──────────────────────────────────────────────────────────────┘
+
+   Open a browser (or Postman) and try:
+
+        http://localhost:8080/ask?question=How many casual leaves do I get?
+
+   ✔ Expected answer:
+        You get 12 casual leaves per year.
+
+        http://localhost:8080/ask?question=What is the notice period?
+
+   ✔ Expected answer:
+        The notice period for resignation is 60 days.
+
+        http://localhost:8080/ask?question=What is the capital of France?
+
+   ✔ Expected answer:
+        I don't know based on the HR policy.
+        (because it's not in our document — RAG stays honest!)
+
+   🎉 You just built a working RAG app in Spring Boot!
+
+
+   ════════════════════════════════════════════════════════════════
+    PART C · GOING FURTHER (after the demo works)
+   ════════════════════════════════════════════════════════════════
+
+   • Use PDFs instead of TXT:
+        add dependency  spring-ai-pdf-document-reader
+        and use  PagePdfDocumentReader  instead of TextReader.
+
+   • Use a REAL vector database (survives restarts, scales):
+        PGVector (Postgres), Redis, Chroma, Milvus, Pinecone.
+        Just swap the VectorStore bean + add its starter dependency.
+
+   • Load MANY documents:
+        loop over a folder of files in DataLoader.
+
+   • Add a nice UI:
+        a simple HTML page or React front-end calling /ask.
+
+   • Add memory/history:
+        keep past messages so the chat feels like a conversation.
+
+   • Tune retrieval:
+        change topK (how many chunks) and chunk size for accuracy.
+
+
+   ════════════════════════════════════════════════════════════════
+    PART D · KEY POINTS TO REMEMBER
+   ════════════════════════════════════════════════════════════════
+
+     • RAG = Retrieval + Augmented + Generation.
+     • RAG = AI answering from YOUR documents (open-book exam).
+     • Two phases: INGESTION (once) and QUERY (every question).
+     • Embedding = text turned into numbers that capture meaning.
+     • Vector store = database that finds similar meaning fast.
+     • You do NOT retrain the model — just update the documents.
+     • Always instruct the AI to answer ONLY from context to
+       reduce hallucination.
+     • Spring AI gives ready pieces: DocumentReader, TextSplitter,
+       EmbeddingModel, VectorStore, ChatClient.
+
+
+   ════════════════════════════════════════════════════════════════
+    PART E · ADVANTAGES OF RAG
+   ════════════════════════════════════════════════════════════════
+
+     1. Uses private/company data the base model never saw.
+     2. Always current — update docs, no retraining.
+     3. Reduces hallucinations — answers grounded in real text.
+     4. Cheap & fast — no expensive model training.
+     5. Shows sources — you can display which chunk was used (trust).
+     6. Secure — with Ollama, data stays on YOUR machine.
+     7. Flexible — swap models or vector DBs without rewriting logic.
+     8. Domain-specific — HR, legal, medical, support, education...
+
+
+   ════════════════════════════════════════════════════════════════
+    PART F · COMMON PROBLEMS & FIXES
+   ════════════════════════════════════════════════════════════════
+
+     ✗ "Connection refused localhost:11434"
+       → Ollama isn't running. Start it / run `ollama list`.
+
+     ✗ Model not found
+       → You forgot to pull it:  ollama pull llama3
+                                 ollama pull nomic-embed-text
+
+     ✗ Answers are slow the first time
+       → Normal. The model loads into memory on first call.
+
+     ✗ "No qualifying bean VectorStore"
+       → Make sure RagConfig (Step 5) exists and is in a scanned
+         package (same/base package as the main app class).
+
+     ✗ Empty or wrong answers
+       → Check the console printed ">> HR policy loaded... chunks".
+         If 0 chunks, the file path/classpath is wrong (Step 4).
+
+
+   ════════════════════════════════════════════════════════════════
+    FLOW RECAP (one screen)
+   ════════════════════════════════════════════════════════════════
+
+     INGEST (startup):
+        hr-policy.txt → chunks → embeddings → VectorStore
+
+     ASK (per question):
+        question → embed → similaritySearch → top chunks
+                 → prompt(question + chunks) → LLM → answer
+
+   ════════════════════════════════════════════════════════════════
+                       END OF RAG GUIDE
+   ════════════════════════════════════════════════════════════════
